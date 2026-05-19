@@ -3,7 +3,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from kaggle_environments import make as _make
-from agent import agent, STATE, TYPE_FACTORY
+from agent_v1 import agent, STATE, TYPE_FACTORY
 
 NUM_GAMES = 500
 SEEDS = [i * 137 + 42 for i in range(NUM_GAMES)]

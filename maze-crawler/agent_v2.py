@@ -370,7 +370,7 @@ def maybe_transfer(uid, data, obs, config, actions, reserved):
     if space <= 0:
         return False
 
-    transfer_amount = min(energy, max(1, int(space)))
+    transfer_amount = min(energy, max(1, int(space) if space != float("inf") else energy))
     # Keep at least 1 energy to survive next turn's drain
     if energy - transfer_amount < 2:
         transfer_amount = max(0, energy - 2)

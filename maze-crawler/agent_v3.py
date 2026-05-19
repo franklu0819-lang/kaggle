@@ -1,5 +1,5 @@
 """NN-powered agent: trained policy network for factory decisions.
-Non-factory units use rule-based logic from agent.py.
+Non-factory units use rule-based logic from agent_v1.py.
 """
 from collections import deque
 import numpy as np

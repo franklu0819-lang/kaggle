@@ -1,3 +1,9 @@
+"""NN-powered agent: trained policy network for factory decisions.
+Non-factory units use rule-based logic from agent_v1.py.
+"""
+from collections import deque
+import numpy as np
+
 """Auto-generated NN weights (BC+PPO v4)."""
 import numpy as np
 
@@ -9,3 +15,365 @@ WEIGHTS = {
     'policy_head.weight': np.array([[0.0473325215280056, 0.06039254367351532, 0.030109887942671776, 0.13262054324150085, 0.028949327766895294, 0.11343029141426086, -0.0667000263929367, -0.10893373191356659, 0.1602591723203659, -0.04465842247009277, -0.11094024777412415, -0.003969402052462101, 0.10086649656295776, -0.03834426775574684, -0.018609538674354553, -0.10204055160284042, 0.053498588502407074, 0.0594349168241024, -0.032116133719682693, 0.08755158632993698, 0.11537349224090576, -0.003425542963668704, 0.08655574172735214, -0.027690265327692032, -0.11306814104318619, 0.06860502809286118, -0.035659704357385635, -0.01890288107097149, 0.11314581334590912, 0.07864131033420563, 0.17207680642604828, -0.09554879367351532, -0.05427537485957146, 0.06721796095371246, -0.09056519716978073, -0.03255767002701759, -0.030015334486961365, 0.01722528785467148, -0.10028394311666489, -0.0398557186126709, -0.01516367495059967, 0.15395107865333557, 0.000816453481093049, 0.06769493222236633, 0.14516885578632355, 0.02079547941684723, 0.12988615036010742, -0.11700940132141113, -0.06481365859508514, 0.19776971638202667, -0.04639728367328644, 0.15723465383052826, -0.1049414724111557, -0.0580642968416214, 0.1603897660970688, 0.1363702416419983, 0.07540501654148102, -0.006098566576838493, 0.14685581624507904, -0.08247711509466171, -0.021549027413129807, 0.13243380188941956, 0.14897671341896057, 0.016401011496782303], [-0.08156029134988785, -0.0929102972149849, -0.07062891125679016, 0.07746642827987671, 0.11466498672962189, 0.046223074197769165, 0.03270919248461723, 0.1353207230567932, -0.0553019754588604, 0.01765882596373558, -0.06985412538051605, -0.016059093177318573, -0.02702724188566208, 0.08674458414316177, -0.0984991043806076, -0.09395864605903625, 0.13267579674720764, 0.051551930606365204, 0.10404868423938751, 0.03429644554853439, -0.12251006811857224, 0.10139691084623337, 0.15568602085113525, -0.0025457036681473255, -0.08233640342950821, 0.040951021015644073, -0.050956904888153076, -0.07011353969573975, 0.11359792202711105, -0.045404769480228424, -0.038351915776729584, 0.0471564382314682, 0.1023675799369812, 0.05585457384586334, 0.09319717437028885, 0.07602008432149887, 0.03900174796581268, -0.05932963266968727, 0.03744656220078468, -0.04221072420477867, -0.06189785525202751, -0.05565526336431503, 0.06838352978229523, 0.06307971477508545, 0.01739858277142048, -0.025858383625745773, -0.08693937957286835, -0.016304681077599525, -0.037209488451480865, -0.08776874840259552, -0.018621770665049553, 0.029235102236270905, 0.03421036899089813, -0.06545965373516083, 0.05641375854611397, 0.11149322986602783, 0.016682637855410576, -0.11060341447591782, 0.015873761847615242, -0.06791815906763077, 0.021730538457632065, 0.0043668742291629314, 0.09367130696773529, -0.22120881080627441], [-0.06543456017971039, 0.13699373602867126, -0.05085836723446846, -0.020760763436555862, 0.05438942462205887, 0.02900974079966545, -0.17208249866962433, 0.18999654054641724, 0.013520256616175175, 0.06996941566467285, -0.013084019534289837, -0.03547351434826851, -0.0946618840098381, -0.03294885531067848, -0.06277020275592804, 0.05362800136208534, 0.05327385291457176, 0.12894003093242645, 0.08551070094108582, 0.0012839509872719646, 0.11645973473787308, -0.11854323744773865, -0.04313497617840767, -0.030808186158537865, 0.09896881133317947, 0.12188243120908737, -0.11398252099752426, 0.0013000813778489828, 0.027465680614113808, -0.11893818527460098, 0.12752732634544373, -0.018663842231035233, -0.04076983034610748, 0.11147774010896683, -0.03729444742202759, -0.0556672178208828, 0.00797341763973236, -0.015790557488799095, -0.0662156492471695, -0.08421764522790909, 0.12368456274271011, -0.07332618534564972, -0.06749315559864044, 0.037010982632637024, 0.049992695450782776, -0.09628667682409286, -0.10323522239923477, 0.11963052302598953, -0.061882372945547104, -0.18237252533435822, -0.03262889385223389, 0.055152520537376404, -0.010873869061470032, -0.010400727391242981, -0.1093260645866394, 0.014853489585220814, 0.03252708911895752, -0.04005090892314911, -0.11257877200841904, 0.016846131533384323, -0.013935468159615993, 0.048491206020116806, 0.003110246267169714, 0.12949778139591217], [-0.10694609582424164, -0.14000365138053894, 0.11783117055892944, -0.10576435178518295, 0.007010846398770809, 0.05789667367935181, -0.03245177119970322, 0.09774266928434372, 0.039939843118190765, -0.037738703191280365, 0.0316278375685215, 0.013552066870033741, -0.015688372775912285, 0.0765547975897789, 0.00038387341191992164, 0.1112368032336235, -0.0633736327290535, 0.013048174791038036, 0.07598817348480225, -0.06710151582956314, -0.013657797127962112, 0.10723826289176941, 0.08496785163879395, 0.07617656141519547, -0.04367978870868683, -0.09855341911315918, 0.07037396728992462, -0.06448286771774292, -0.1302088499069214, 0.07327356189489365, 0.0870743840932846, -0.04688210412859917, 0.06371524930000305, -0.13321749866008759, 0.03355744853615761, 0.11860564351081848, -0.05470104515552521, -0.10465672612190247, 0.09372739493846893, 0.05015632510185242, 0.09444548934698105, -0.015066737309098244, -0.022908711805939674, -0.10007433593273163, 0.07493147999048233, -0.02145560458302498, 0.09608139097690582, -0.021944282576441765, 0.12213574349880219, -0.07534342259168625, 0.012934300117194653, -0.014273461885750294, -0.07668715715408325, 0.09068246930837631, 0.08682015538215637, -0.05239083990454674, -0.04937952384352684, 0.030619682744145393, -0.08506720513105392, 0.0319085530936718, -0.12564191222190857, -0.01783633790910244, 0.027599768713116646, 0.016430610790848732], [0.030291039496660233, 0.10269800573587418, 0.1078530102968216, 0.2086130827665329, -0.05083072930574417, 0.06953942775726318, -0.11565683037042618, 0.2315675914287567, 0.08613905310630798, 0.07877718657255173, 0.023764416575431824, 0.2272084504365921, -0.12431374192237854, -0.1002153530716896, 0.12268824875354767, 0.12494108825922012, 0.05252224579453468, 0.03825022280216217, 0.12362547218799591, -0.003939158748835325, 0.012624322436749935, -0.016682302579283714, 0.04676950350403786, -0.02627463825047016, -0.06494922935962677, 0.12419342249631882, 0.08299904316663742, 0.015114447101950645, 0.1280147135257721, -0.0073504988104105, -0.09195740520954132, -0.048281479626894, -0.09316763281822205, 0.07595685869455338, 0.14911548793315887, 0.004602659959346056, -0.013978851027786732, -0.15211161971092224, -0.05660029128193855, 0.12345889955759048, -0.10064374655485153, 0.008303013630211353, -0.11921051144599915, 0.06446974724531174, -0.010851304978132248, -0.042319852858781815, 0.09828586131334305, 0.08557555824518204, -0.1150459498167038, -0.14557798206806183, -0.0456840842962265, 0.10561786592006683, -0.09725490212440491, 0.1897478997707367, -0.0714903175830841, -0.026157021522521973, -0.07239881902933121, 0.041515249758958817, 0.08589597046375275, 0.13135293126106262, 0.17690716683864594, -0.0031933956779539585, -0.05194821208715439, -0.10685302317142487], [0.06518305093050003, -0.020291663706302643, 0.09326983243227005, 0.016633447259664536, -0.04675611853599548, -0.030658826231956482, -0.0460541695356369, -0.03650528937578201, 0.07988680899143219, -0.014089922420680523, -0.014409047551453114, 0.11920414865016937, 0.10882943868637085, -0.02996126189827919, 0.03909119963645935, -0.10786163806915283, 0.07073753327131271, -0.0732806846499443, -0.07443882524967194, -0.09764765948057175, 0.06792722642421722, -0.04417765885591507, 0.020831285044550896, -0.0014602994779124856, 0.11654475331306458, 0.07309743016958237, 0.04089414328336716, -0.02202678844332695, 0.025974655523896217, 0.08960287272930145, -0.023987337946891785, 0.03251715004444122, -0.08474089950323105, -0.10746045410633087, -0.09238442033529282, 0.025934621691703796, -0.06886950135231018, -0.016546398401260376, 0.07801710069179535, 0.08382108062505722, 0.10198460519313812, -0.07873682677745819, -0.1268521249294281, 0.01703236997127533, -0.02693198062479496, 0.10070080310106277, 0.04711673781275749, 0.051128510385751724, -0.08267683535814285, 0.12477527558803558, 0.10385878384113312, -0.02074568346142769, -0.10363565385341644, 0.11888787895441055, -0.05876386538147926, -0.023946020752191544, 0.09291984885931015, 0.07845461368560791, 0.10901761054992676, -0.13069097697734833, 0.04115767776966095, -0.02101273275911808, -0.13765017688274384, -0.12052644044160843], [0.03371959552168846, -0.07500734180212021, 0.06271986663341522, -0.05612098425626755, 0.09176728874444962, -0.02720104157924652, -0.002247623633593321, 0.08590058982372284, 0.005478780250996351, 0.02847488597035408, -0.032267551869153976, -0.1336260735988617, -0.10167384892702103, 0.05553093180060387, -0.00025034803547896445, -0.038165606558322906, -0.02518802508711815, 0.044735584408044815, 0.05167786777019501, 0.075933538377285, -0.13248783349990845, -0.0018404849106445909, -0.029376879334449768, 0.1167491227388382, 0.041032541543245316, -0.03994416445493698, -0.015727471560239792, 0.04280462488532066, -0.058664534240961075, 0.10766514390707016, -0.12821125984191895, 0.04636947438120842, 0.0800422802567482, 0.061415303498506546, -0.13793574273586273, -0.052854761481285095, 0.02189229428768158, -0.06261096894741058, -0.009829196147620678, -0.027472535148262978, 0.08336430042982101, -0.08554667234420776, -0.021607225760817528, -0.07521422207355499, -0.11239062994718552, 0.07525809854269028, 0.003954750951379538, -0.047373026609420776, -0.04026081785559654, -0.0567048043012619, -0.04580695927143097, -0.12460833042860031, -0.04673506319522858, -0.09372468292713165, -0.04340074956417084, -0.03556084632873535, -0.013824386522173882, 0.1119227334856987, -0.15045320987701416, 0.06984594464302063, -0.13073165714740753, -0.05154377967119217, 0.022099832072854042, 0.12204056978225708], [0.10471891611814499, -0.11945904791355133, -0.007139646913856268, 0.06488584727048874, 0.03669474273920059, -0.062365904450416565, -0.10364601761102676, 0.08168265968561172, -0.10294589400291443, 0.0825946107506752, 0.09341927617788315, -0.031989842653274536, -0.11661136895418167, -0.020025743171572685, 0.010367178358137608, -0.02128458581864834, -0.12091008573770523, -0.16285891830921173, -0.05201583728194237, 0.03154010698199272, -0.1353674978017807, -0.007883215323090553, -0.006872072815895081, 0.07914986461400986, 0.0852932408452034, -0.12707258760929108, 0.011174793355166912, 0.03532277047634125, -0.003792904317378998, 0.07917236536741257, -0.020061878487467766, 0.052357979118824005, 0.05215730518102646, 0.017979132011532784, -0.08369611948728561, 0.010463174432516098, -0.0867079645395279, -0.059809520840644836, 0.09308288246393204, 0.08813217282295227, -0.0278608575463295, -0.009039385244250298, -0.14255796372890472, -0.04649963974952698, -0.06793326884508133, 0.006745440885424614, -0.050754085183143616, -0.04461407661437988, 0.06642908602952957, 0.02368801273405552, 0.0629405826330185, -0.027094854041934013, -0.1061764508485794, -0.027467308565974236, -0.05684725567698479, -0.13455721735954285, -0.14592866599559784, -0.09682845324277878, -0.04247237369418144, 0.10289163887500763, -0.0785163938999176, -0.006194796413183212, 0.032230909913778305, -0.03043963760137558], [0.017202632501721382, -0.06427955627441406, 0.0430234894156456, -0.16566942632198334, 0.08206957578659058, 0.019018983468413353, 0.19783154129981995, -0.09263521432876587, 0.05812574177980423, 0.0373687706887722, -0.09652621299028397, -0.2595357298851013, 0.08821617811918259, 0.011149084195494652, 0.037535473704338074, 0.08321104943752289, -0.125697061419487, -0.04647241160273552, 0.020945025607943535, 0.04890742152929306, 0.10261230915784836, 0.10949261486530304, -0.0730784460902214, 0.08090221136808395, -0.08976194262504578, 0.005953245330601931, 0.04085911810398102, -0.09516745060682297, -0.10597902536392212, -0.11026450246572495, -0.04385977238416672, 0.09907118231058121, 0.014482522383332253, -0.12653081119060516, -0.15084578096866608, -0.05137960985302925, 0.10798385739326477, 0.13353119790554047, 0.05075261369347572, -0.09946416318416595, 0.06079993396997452, -0.10200854390859604, -0.022068416699767113, -0.05956187844276428, -0.0747469961643219, -0.044147856533527374, -0.04609725996851921, 0.10182779282331467, -0.12274781614542007, 0.29511263966560364, 0.1218922957777977, 0.09959801286458969, -0.09488093852996826, -0.20123769342899323, -0.00803226139396429, 0.06655298173427582, -0.024834688752889633, -0.086553193628788, 0.12223754078149796, 0.0878191888332367, -0.2070254236459732, 0.13497371971607208, 0.16309523582458496, 0.08507562428712845]], dtype=np.float32),
     'policy_head.bias': np.array([0.12223350256681442, 0.0033667520619928837, -0.11915308237075806, -0.07437021285295486, 0.06861062347888947, 0.12411873787641525, 0.06643350422382355, 0.08674101531505585, -0.005655955523252487], dtype=np.float32),
 }
+
+WEIGHTS = WEIGHTS
+
+
+STATE = {
+    "turn": 0,
+    "nodes": set(),
+    "last_factory_pos": None,
+    "factory_stuck": 0,
+}
+
+TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER = 0, 1, 2, 3
+BIT_N, BIT_E, BIT_S, BIT_W = 1, 2, 4, 8
+
+DIRS = {
+    "NORTH": (0, 1, BIT_N),
+    "EAST":  (1, 0, BIT_E),
+    "SOUTH": (0, -1, BIT_S),
+    "WEST":  (-1, 0, BIT_W),
+}
+OPPOSITE_BIT = {"NORTH": BIT_S, "EAST": BIT_W, "SOUTH": BIT_N, "WEST": BIT_E}
+
+ACTIONS = [
+    "NORTH", "EAST", "WEST", "SOUTH", "JUMP_NORTH",
+    "BUILD_WORKER", "BUILD_SCOUT", "BUILD_MINER", "IDLE",
+]
+NUM_ACTIONS = len(ACTIONS)
+
+# ─── Utility functions (from agent.py) ────────────────────────────────
+
+def parse_key(key):
+    c, r = key.split(",")
+    return int(c), int(r)
+
+def in_bounds(c, r, obs, config):
+    return 0 <= c < config.width and obs.southBound <= r <= obs.northBound
+
+def wb(obs, config, c, r):
+    idx = (r - obs.southBound) * config.width + c
+    if 0 <= idx < len(obs.walls):
+        w = obs.walls[idx]
+        if w != -1:
+            return w
+    return None
+
+def can_go(obs, config, c, r, d):
+    dc, dr, bit = DIRS[d]
+    nc, nr = c + dc, r + dr
+    if not in_bounds(nc, nr, obs, config):
+        return False
+    w = wb(obs, config, c, r)
+    if w is not None and (w & bit):
+        return False
+    w2 = wb(obs, config, nc, nr)
+    if w2 is not None and (w2 & OPPOSITE_BIT[d]):
+        return False
+    return True
+
+def update_state(obs, config, my_player):
+    STATE["turn"] += 1
+    for key in getattr(obs, "miningNodes", {}) or {}:
+        STATE["nodes"].add(parse_key(key))
+    for uid, data in obs.robots.items():
+        if data[4] == my_player and data[0] == TYPE_FACTORY:
+            pos = (data[1], data[2])
+            if STATE["last_factory_pos"] is not None:
+                if pos == STATE["last_factory_pos"]:
+                    STATE["factory_stuck"] += 1
+                else:
+                    STATE["factory_stuck"] = 0
+            STATE["last_factory_pos"] = pos
+            break
+
+def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=300):
+    if not goals:
+        return None
+    goal_set = set(goals)
+    if start in goal_set:
+        return None
+    q = deque([(start, None)])
+    visited = {start}
+    best_fd, best_dist = None, 999999
+    while q:
+        cur, first_d = q.popleft()
+        dist = min(abs(cur[0] - g[0]) + abs(cur[1] - g[1]) for g in goals)
+        if dist < best_dist:
+            best_dist = dist
+            best_fd = first_d
+        for d in ("NORTH", "EAST", "WEST", "SOUTH"):
+            if not passable_fn(obs, config, cur[0], cur[1], d):
+                continue
+            dc, dr, _ = DIRS[d]
+            nxt = (cur[0] + dc, cur[1] + dr)
+            if nxt in visited:
+                continue
+            visited.add(nxt)
+            fd = first_d or d
+            if nxt in goal_set:
+                return fd
+            q.append((nxt, fd))
+            if len(visited) >= max_nodes:
+                return best_fd
+    return best_fd
+
+def bfs_to_row(start, row, obs, config, passable_fn):
+    goals = [(c, row) for c in range(config.width) if in_bounds(c, row, obs, config)]
+    return bfs_first_step(start, goals, obs, config, passable_fn)
+
+def friendly_at(occupied, cell, my_player):
+    return any(o[1][4] == my_player for o in occupied.get(cell, []))
+
+def try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
+    dc, dr, _ = DIRS[d]
+    nxt = (c + dc, r + dr)
+    if nxt in reserved or friendly_at(occupied, nxt, my_player):
+        return False
+    actions[uid] = d
+    reserved.add(nxt)
+    return True
+
+def move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, target_row=None):
+    if target_row is None:
+        target_row = r + 1
+    target_row = min(obs.northBound, target_row)
+    step = bfs_to_row((c, r), target_row, obs, config, can_go)
+    if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+        return True
+    width = config.width
+    center = width // 4
+    ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
+    for d in ["NORTH"] + ew + ["SOUTH"]:
+        if can_go(obs, config, c, r, d):
+            if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
+                return True
+    return False
+
+# ─── NN Forward Pass (numpy) ──────────────────────────────────────────
+
+def nn_forward(features, mask):
+    x = features
+    x = np.maximum(0, x @ WEIGHTS['net.0.weight'].T + WEIGHTS['net.0.bias'])
+    x = np.maximum(0, x @ WEIGHTS['net.2.weight'].T + WEIGHTS['net.2.bias'])
+    logits = x @ WEIGHTS['net.4.weight'].T + WEIGHTS['net.4.bias']
+    logits[mask == 0] = -1e9
+    logits -= logits.max()
+    exp_l = np.exp(logits)
+    probs = exp_l / exp_l.sum()
+    return np.argmax(probs)
+
+# ─── Feature Extraction ───────────────────────────────────────────────
+
+def extract(obs, config, my_player, occupied):
+    factory = None
+    for uid, d in obs.robots.items():
+        if d[4] == my_player and d[0] == TYPE_FACTORY:
+            factory = (uid, d)
+            break
+    if factory is None:
+        return None, None
+
+    uid, data = factory
+    c, r, energy = data[1], data[2], data[3]
+    move_cd = data[5] if len(data) > 5 else 0
+    jump_cd = data[6] if len(data) > 6 else 0
+    build_cd = data[7] if len(data) > 7 else 0
+    gap = r - obs.southBound
+    w = config.width
+    turn = STATE["turn"]
+
+    grid = np.zeros((5, 5, 5), dtype=np.float32)
+    for dr in range(-2, 3):
+        for dc in range(-2, 3):
+            nc, nr = c + dc, r + dr
+            idx = (nr - obs.southBound) * w + nc
+            if (0 <= nc < w and obs.southBound <= nr <= obs.northBound
+                    and 0 <= idx < len(obs.walls)):
+                v = obs.walls[idx]
+                if v != -1:
+                    grid[dr+2, dc+2] = [
+                        float(bool(v & 1)), float(bool(v & 2)),
+                        float(bool(v & 4)), float(bool(v & 8)), 1.0,
+                    ]
+    wall_flat = grid.flatten()
+
+    sc = sum(1 for d in obs.robots.values() if d[4] == my_player and d[0] == TYPE_SCOUT)
+    wc = sum(1 for d in obs.robots.values() if d[4] == my_player and d[0] == TYPE_WORKER)
+    mc = sum(1 for d in obs.robots.values() if d[4] == my_player and d[0] == TYPE_MINER)
+    has_nodes = float(bool(getattr(obs, "miningNodes", {})))
+    stuck = STATE.get("factory_stuck", 0)
+
+    scalars = np.array([
+        gap / 20.0, energy / 1000.0, move_cd / 5.0, jump_cd / 20.0,
+        build_cd / 10.0, c / max(1, w - 1), turn / 500.0,
+        sc / 3.0, wc / 2.0, mc / 2.0, has_nodes, stuck / 10.0,
+    ], dtype=np.float32)
+
+    features = np.concatenate([wall_flat, scalars])
+
+    mask = np.zeros(NUM_ACTIONS, dtype=np.float32)
+    if move_cd == 0:
+        for i, d in enumerate(["NORTH", "EAST", "WEST", "SOUTH"]):
+            if can_go(obs, config, c, r, d):
+                mask[i] = 1.0
+    if jump_cd == 0 and turn > 2 and in_bounds(c, r + 2, obs, config):
+        mask[4] = 1.0
+    s_ok = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
+    if move_cd != 0 and build_cd == 0 and s_ok:
+        spawn = (c, r + 1)
+        if not friendly_at(occupied, spawn, my_player):
+            if energy >= getattr(config, "workerCost", 200):
+                mask[5] = 1.0
+            if energy >= getattr(config, "scoutCost", 50):
+                mask[6] = 1.0
+            if has_nodes and energy >= getattr(config, "minerCost", 300):
+                mask[7] = 1.0
+    mask[8] = 1.0
+    if mask.sum() == 0:
+        mask[8] = 1.0
+
+    return features, mask
+
+# ─── Unit Actions (rule-based) ────────────────────────────────────────
+
+def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player):
+    c, r, energy = data[1], data[2], data[3]
+    move_cd = data[5] if len(data) > 5 else 0
+    if move_cd != 0:
+        actions[uid] = "IDLE"
+        reserved.add((c, r))
+        return
+    crystals = [(parse_key(k), v) for k, v in (getattr(obs, "crystals", {}) or {}).items()]
+    if crystals:
+        best = max(
+            [(v / max(1, abs(cell[0] - c) + abs(cell[1] - r)), cell)
+             for cell, v in crystals if cell != (c, r)],
+            key=lambda x: x[0], default=None,
+        )
+        if best:
+            _, target = best
+            step = bfs_first_step((c, r), [target], obs, config, can_go)
+            if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+                return
+    factory_pos = None
+    for uid2, d2 in obs.robots.items():
+        if d2[4] == my_player and d2[0] == TYPE_FACTORY:
+            factory_pos = (d2[1], d2[2])
+            break
+    if factory_pos:
+        fc, fr = factory_pos
+        target_row = min(obs.northBound, fr + 6)
+        half = config.width // 2
+        target_col = min(half - 1, c + 3) if c < half else max(half, c - 3)
+        step = bfs_first_step((c, r), [(target_col, target_row)], obs, config, can_go)
+        if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+            return
+    if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
+        return
+    actions[uid] = "IDLE"
+    reserved.add((c, r))
+
+def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player):
+    c, r, energy = data[1], data[2], data[3]
+    move_cd = data[5] if len(data) > 5 else 0
+    wall_cost = getattr(config, "wallRemoveCost", 100)
+    factory_pos = None
+    for uid2, d2 in obs.robots.items():
+        if d2[4] == my_player and d2[0] == TYPE_FACTORY:
+            factory_pos = (d2[1], d2[2])
+            break
+    if factory_pos and (c, r) == (factory_pos[0], factory_pos[1] + 1):
+        for d in ("NORTH", "EAST", "WEST"):
+            if can_go(obs, config, c, r, d):
+                if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
+                    return
+    if factory_pos and energy >= wall_cost + 20:
+        fc, fr = factory_pos
+        if c == fc and r == fr + 1:
+            w = wb(obs, config, c, r)
+            if w is not None and (w & BIT_N):
+                actions[uid] = "REMOVE_NORTH"
+                reserved.add((c, r))
+                return
+        if abs(c - fc) + abs(r - fr) <= 2:
+            for d, bit in [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]:
+                w = wb(obs, config, c, r)
+                if w is not None and (w & bit):
+                    actions[uid] = f"REMOVE_{d}"
+                    reserved.add((c, r))
+                    return
+    if move_cd != 0:
+        actions[uid] = "IDLE"
+        reserved.add((c, r))
+        return
+    target_row = r + 1
+    if factory_pos:
+        target_row = min(obs.northBound, factory_pos[1] + 2)
+    if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, target_row):
+        return
+    actions[uid] = "IDLE"
+    reserved.add((c, r))
+
+def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player):
+    c, r, energy = data[1], data[2], data[3]
+    move_cd = data[5] if len(data) > 5 else 0
+    transform_cost = getattr(config, "transformCost", 100)
+    visible_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
+    if (c, r) in visible_nodes and energy >= transform_cost + 1:
+        actions[uid] = "TRANSFORM"
+        reserved.add((c, r))
+        return
+    if move_cd != 0:
+        actions[uid] = "IDLE"
+        reserved.add((c, r))
+        return
+    mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
+    vis_list = [n for n in visible_nodes if n not in mines]
+    rem_list = [n for n in STATE["nodes"] if n not in mines and in_bounds(n[0], n[1], obs, config)]
+    all_nodes = vis_list + rem_list
+    if all_nodes:
+        target = min(all_nodes, key=lambda n: abs(n[0] - c) + abs(n[1] - r))
+        step = bfs_first_step((c, r), [target], obs, config, can_go)
+        if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+            return
+    if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
+        return
+    actions[uid] = "IDLE"
+    reserved.add((c, r))
+
+# ─── Main Agent ───────────────────────────────────────────────────────
+
+def agent(obs, config):
+    my_player = obs.player
+    update_state(obs, config, my_player)
+
+    actions = {}
+    reserved = set()
+    occupied = {}
+    for uid, data in obs.robots.items():
+        cell = (data[1], data[2])
+        occupied.setdefault(cell, []).append((uid, data))
+
+    # Non-factory units first (rule-based)
+    for uid, data in obs.robots.items():
+        if data[4] == my_player and data[0] == TYPE_SCOUT:
+            scout_action(uid, data, obs, config, actions, reserved, occupied, my_player)
+    for uid, data in obs.robots.items():
+        if uid not in actions and data[4] == my_player and data[0] == TYPE_WORKER:
+            worker_action(uid, data, obs, config, actions, reserved, occupied, my_player)
+    for uid, data in obs.robots.items():
+        if uid not in actions and data[4] == my_player and data[0] == TYPE_MINER:
+            miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
+
+    # Factory: neural network
+    for uid, data in obs.robots.items():
+        if data[4] == my_player and data[0] == TYPE_FACTORY:
+            feat, msk = extract(obs, config, my_player, occupied)
+            if feat is not None:
+                ai = nn_forward(feat, msk)
+                actions[uid] = ACTIONS[ai]
+            break
+
+    return actions

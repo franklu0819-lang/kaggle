@@ -12,7 +12,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent import (
+from agent_v1 import (
     agent as fog_agent, STATE, TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER
 )
 

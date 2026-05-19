@@ -13,7 +13,7 @@ import torch.optim as optim
 import numpy as np
 from kaggle_environments import make
 
-from agent import (
+from agent_v1 import (
     STATE, TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER,
     parse_key, in_bounds, wb, can_go, update_state,
     friendly_at, DIRS,
@@ -33,18 +33,27 @@ ACTIONS = [
 ]
 NUM_ACTIONS = len(ACTIONS)
 
+# Reward shaping
+GAMMA = 0.99
+W_GAP = 1.0
+W_MOVE = 0.5
+W_JUMP = 0.3
+W_SURVIVAL = 0.1
+W_OUTCOME_WIN = 3.0
+W_OUTCOME_LOSS = -1.0
+
 
 # ─── Feature Extraction ──────────────────────────────────────────────
 
 def extract(obs, config, my_player, occupied):
-    """Return (features[137], mask[9]) or (None, None)."""
+    """Return (features[137], mask[9], factory_row, jump_cd) or (None, None, None, None)."""
     factory = None
     for uid, d in obs.robots.items():
         if d[4] == my_player and d[0] == TYPE_FACTORY:
             factory = (uid, d)
             break
     if factory is None:
-        return None, None
+        return None, None, None, None  # (features, mask, factory_row, jump_cd)
 
     uid, data = factory
     c, r, energy = data[1], data[2], data[3]
@@ -116,7 +125,7 @@ def extract(obs, config, my_player, occupied):
     if mask.sum() == 0:
         mask[8] = 1.0
 
-    return features, mask
+    return features, mask, r, jump_cd
 
 
 # ─── Policy Network ──────────────────────────────────────────────────
@@ -142,12 +151,14 @@ class PolicyNet(nn.Module):
 # ─── Game Runner ─────────────────────────────────────────────────────
 
 def run_game(policy_net, seed, explore=True):
-    """Run one game. Returns (trajectory, r0, r1).
-    trajectory: [(features, action_idx, mask), ...]
+    """Run one game. Returns (trajectory, r0, r1, total_steps).
+    trajectory: [(features, action_idx, mask, step_info), ...]
     """
     STATE.update({"turn": 0, "nodes": set(), "last_factory_pos": None, "factory_stuck": 0})
     env = make("crawl", configuration={"randomSeed": seed}, debug=True)
     traj = []
+    prev_factory_row = [None]
+    prev_jump_cd = [None]
 
     def nn_agent(obs, config):
         my_player = obs.player
@@ -171,7 +182,7 @@ def run_game(policy_net, seed, explore=True):
 
         for uid2, d2 in obs.robots.items():
             if d2[4] == my_player and d2[0] == TYPE_FACTORY:
-                feat, msk = extract(obs, config, my_player, occupied)
+                feat, msk, factory_row, jump_cd = extract(obs, config, my_player, occupied)
                 if feat is not None:
                     s = torch.FloatTensor(feat).unsqueeze(0)
                     m = torch.FloatTensor(msk).unsqueeze(0)
@@ -181,7 +192,17 @@ def run_game(policy_net, seed, explore=True):
                         ai = torch.distributions.Categorical(probs).sample().item()
                     else:
                         ai = torch.argmax(probs).item()
-                    traj.append((feat.copy(), ai, msk.copy()))
+                    step_info = {
+                        "factory_row": factory_row,
+                        "south_bound": obs.southBound,
+                        "prev_factory_row": prev_factory_row[0],
+                        "prev_jump_cd": prev_jump_cd[0],
+                        "jump_cd": jump_cd,
+                        "turn": STATE["turn"],
+                    }
+                    traj.append((feat.copy(), ai, msk.copy(), step_info))
+                    prev_factory_row[0] = factory_row
+                    prev_jump_cd[0] = jump_cd
                     actions[uid2] = ACTIONS[ai]
                 break
 
@@ -190,12 +211,91 @@ def run_game(policy_net, seed, explore=True):
     env.run([nn_agent, "random"])
     final = env.steps[-1]
     r0, r1 = final[0].reward, final[1].reward
-    return traj, r0, r1
+    return traj, r0, r1, len(env.steps)
+
+
+# ─── Reward Computation ──────────────────────────────────────────────
+
+def compute_rewards(traj, r0, r1):
+    """Compute per-step shaped rewards from trajectory metadata."""
+    T = len(traj)
+    if T == 0:
+        return []
+
+    step_rewards = []
+    for i, (feat, ai, msk, info) in enumerate(traj):
+        factory_row = info["factory_row"]
+        south_bound = info["south_bound"]
+        prev_row = info["prev_factory_row"]
+        jcd = info["jump_cd"]
+
+        # A: Gap reward — core survival signal
+        gap = factory_row - south_bound
+        gap_reward = W_GAP * (gap / 20.0)
+
+        # B: Northward movement reward
+        if prev_row is not None:
+            delta_row = factory_row - prev_row
+            move_reward = W_MOVE * delta_row
+        else:
+            delta_row = 0
+            move_reward = 0.0
+
+        # C: JUMP effectiveness
+        if ACTIONS[ai] == "JUMP_NORTH":
+            if delta_row >= 2:
+                jump_reward = W_JUMP * 1.0
+            elif delta_row >= 1:
+                jump_reward = W_JUMP * 0.3
+            else:
+                jump_reward = W_JUMP * (-0.5)
+        else:
+            jump_reward = 0.0
+
+        # D: Per-step survival bonus
+        survival_reward = W_SURVIVAL
+
+        # E: Outcome bonus (terminal only)
+        outcome_reward = 0.0
+        if i == T - 1:
+            if r0 > r1:
+                outcome_reward = W_OUTCOME_WIN
+            elif r0 < r1:
+                outcome_reward = W_OUTCOME_LOSS
+
+        total = gap_reward + move_reward + jump_reward + survival_reward + outcome_reward
+        step_rewards.append(total)
+
+    return step_rewards
+
+
+def compute_returns(step_rewards, gamma=GAMMA):
+    """Compute discounted returns: G_t = r_t + gamma * G_{t+1}."""
+    T = len(step_rewards)
+    returns = [0.0] * T
+    G = 0.0
+    for t in reversed(range(T)):
+        G = step_rewards[t] + gamma * G
+        returns[t] = G
+    return returns
 
 
 # ─── Training Loop ───────────────────────────────────────────────────
 
-def train(num_iter=200, batch=50, lr=0.001, save_path="nn_weights.pt"):
+def _next_version():
+    """Find the next available version number for weight files."""
+    v = 1
+    while os.path.exists(f"nn_weights_v{v}.pt"):
+        v += 1
+    return v
+
+
+def train(num_iter=200, batch=50, lr=0.001, version=None):
+    if version is None:
+        version = _next_version()
+    save_path = f"nn_weights_v{version}.pt"
+    print(f"Training v{version}, weights -> {save_path}")
+
     policy_net = PolicyNet()
     optimizer = optim.Adam(policy_net.parameters(), lr=lr)
     best_wr = 0
@@ -204,20 +304,24 @@ def train(num_iter=200, batch=50, lr=0.001, save_path="nn_weights.pt"):
     for it in range(num_iter):
         all_feat, all_act, all_mask, all_ret = [], [], [], []
         wins = 0
+        batch_step_rewards = []
 
         for _ in range(batch):
             seed = random.randint(0, 999999)
-            traj, r0, r1 = run_game(policy_net, seed, explore=True)
+            traj, r0, r1, total_steps = run_game(policy_net, seed, explore=True)
 
-            reward = 1.0 if r0 > r1 else (-1.0 if r0 < r1 else 0.0)
             if r0 > r1:
                 wins += 1
 
-            for feat, ai, msk in traj:
+            step_rewards = compute_rewards(traj, r0, r1)
+            returns = compute_returns(step_rewards)
+            batch_step_rewards.extend(step_rewards)
+
+            for i, (feat, ai, msk, info) in enumerate(traj):
                 all_feat.append(feat)
                 all_act.append(ai)
                 all_mask.append(msk)
-                all_ret.append(reward)
+                all_ret.append(returns[i])
 
         # Update policy
         states = torch.FloatTensor(np.array(all_feat))
@@ -238,30 +342,38 @@ def train(num_iter=200, batch=50, lr=0.001, save_path="nn_weights.pt"):
 
         wr = wins / batch * 100
         elapsed = time.time() - t0
+        avg_sr = np.mean(batch_step_rewards) if batch_step_rewards else 0
         print(f"[{it+1:3d}/{num_iter}] WR={wr:5.1f}% loss={loss.item():.4f} "
-              f"steps={len(all_feat)} t={elapsed:.0f}s")
+              f"avg_r={avg_sr:.3f} steps={len(all_feat)} t={elapsed:.0f}s")
 
         if wr > best_wr:
             best_wr = wr
             torch.save(policy_net.state_dict(), save_path)
             print(f"  -> New best {best_wr:.0f}% saved")
 
-    return policy_net
+    # Always save final weights regardless of best
+    final_path = f"nn_weights_v{version}_final.pt"
+    torch.save(policy_net.state_dict(), final_path)
+    print(f"Final weights saved to {final_path}")
+    return policy_net, version, best_wr
 
 
 def evaluate(policy_net, num_games=500):
     wins, losses, draws = 0, 0, 0
     for i in range(num_games):
         seed = i * 137 + 42
-        _, r0, r1 = run_game(policy_net, seed, explore=False)
+        _, r0, r1, _ = run_game(policy_net, seed, explore=False)
         if r0 > r1: wins += 1
         elif r0 < r1: losses += 1
         else: draws += 1
     print(f"Eval: {wins}W-{losses}L-{draws}D ({wins/num_games*100:.1f}%)")
+    return wins, losses, draws
 
 
-def export_weights(policy_net, path="nn_weights.py"):
+def export_weights(policy_net, version, path=None):
     """Export weights as Python/numpy for submission agent."""
+    if path is None:
+        path = f"nn_weights_v{version}.py"
     sd = policy_net.state_dict()
     with open(path, "w") as f:
         f.write('"""Auto-generated NN weights."""\nimport numpy as np\n\nWEIGHTS = {\n')
@@ -273,7 +385,7 @@ def export_weights(policy_net, path="nn_weights.py"):
 
 
 if __name__ == "__main__":
-    net = train(num_iter=200, batch=50, lr=0.001)
-    net.load_state_dict(torch.load("nn_weights.pt"))
+    net, ver, best = train(num_iter=200, batch=50, lr=0.001)
+    net.load_state_dict(torch.load(f"nn_weights_v{ver}.pt"))
     evaluate(net)
-    export_weights(net)
+    export_weights(net, ver)
