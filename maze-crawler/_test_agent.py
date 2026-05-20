@@ -307,19 +307,12 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return
 
-    # Remove walls blocking factory's north path
-    if factory_pos and energy >= wall_cost + 20:
-        fc, fr = factory_pos
-        if c == fc and r == fr + 1:
-            w = wb(obs, config, c, r)
-            if w is not None and (w & BIT_N):
-                actions[uid] = "REMOVE_NORTH"
-                reserved.add((c, r))
-                return
-        if abs(c - fc) + abs(r - fr) <= 2:
-            for d, bit in [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]:
-                w = wb(obs, config, c, r)
-                if w is not None and (w & bit):
+    # Remove any wall encountered while moving ahead
+    if energy >= wall_cost:
+        w = wb(obs, config, c, r)
+        if w is not None:
+            for d, bit in [("NORTH", BIT_N)]:
+                if w & bit:
                     actions[uid] = f"REMOVE_{d}"
                     reserved.add((c, r))
                     return
@@ -329,15 +322,12 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
         reserved.add((c, r))
         return
 
-    # Follow factory
-    target_row = r + 1
+    # Move ahead of factory
+    target_row = min(obs.northBound, r + 3)
     if factory_pos:
-        target_row = min(obs.northBound, factory_pos[1] + 2)
+        target_row = min(obs.northBound, factory_pos[1] + 5)
     if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, target_row):
         return
-
-    actions[uid] = "IDLE"
-    reserved.add((c, r))
 
     actions[uid] = "IDLE"
     reserved.add((c, r))

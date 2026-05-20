@@ -1,20 +1,24 @@
-"""v9 agent: fast exploration + dynamic strategy.
+"""v6 agent: strategy-based rewrite with wall memory, mine economy, scroll prediction.
 
-Key principles:
-1. Early game: build scouts immediately for fast maze exploration
-2. Scouts reveal walls ahead of factory, enabling better pathfinding
-3. Mid game: build worker to clear walls, miner for mine economy
-4. Late game: pure survival
-5. Strategy adapts to gap/energy/turn dynamically
+Key principles from game strategy:
+1. Mine economy: 50 energy/turn per mine >> crystal collection
+2. Wall memory: remember walls permanently for better BFS
+3. Scroll speed prediction: danger zone adapts to scroll rate
+4. Emergency mode after 400 steps: stop building,全力北移
+5. Worker clears path ahead of factory
 """
 from collections import deque
 
+# ─── State ────────────────────────────────────────────────────────────────
+
 STATE = {
     "turn": 0,
-    "nodes": set(),
-    "last_factory_pos": None,
+    "walls": {},          # (col, row) -> wall bitfield, permanent memory
+    "nodes": set(),       # discovered mining nodes (col, row)
+    "mines": {},          # (col, row) -> [energy, maxEnergy, owner]
+    "enemy_pos": {},      # uid -> (col, row, turn)
     "factory_stuck": 0,
-    "walls": {},
+    "factory_last_pos": None,
 }
 
 TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER = 0, 1, 2, 3
@@ -29,6 +33,8 @@ DIRS = {
 OPPOSITE_BIT = {"NORTH": BIT_S, "EAST": BIT_W, "SOUTH": BIT_N, "WEST": BIT_E}
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────
+
 def parse_key(key):
     c, r = key.split(",")
     return int(c), int(r)
@@ -38,17 +44,26 @@ def in_bounds(c, r, obs, config):
     return 0 <= c < config.width and obs.southBound <= r <= obs.northBound
 
 
+def update_walls(obs, config):
+    """Merge visible walls into permanent memory."""
+    w = config.width
+    for i, v in enumerate(obs.walls):
+        if v != -1:
+            r = obs.southBound + i // w
+            c = i % w
+            STATE["walls"][(c, r)] = v
+
+
 def wb(obs, config, c, r):
     idx = (r - obs.southBound) * config.width + c
     if 0 <= idx < len(obs.walls):
         w = obs.walls[idx]
         if w != -1:
-            STATE["walls"][(c, r)] = w
             return w
-    return STATE["walls"].get((c, r))
+    return None
 
 
-def can_go(obs, config, c, r, d):
+def can_go(c, r, d, obs, config):
     """Optimistic: unknown = passable, only known walls block."""
     dc, dr, bit = DIRS[d]
     nc, nr = c + dc, r + dr
@@ -65,21 +80,49 @@ def can_go(obs, config, c, r, d):
 
 def update_state(obs, config, my_player):
     STATE["turn"] += 1
+    update_walls(obs, config)
     for key in getattr(obs, "miningNodes", {}) or {}:
         STATE["nodes"].add(parse_key(key))
+    for key, data in getattr(obs, "mines", {}).items():
+        STATE["mines"][parse_key(key)] = data
     for uid, data in obs.robots.items():
-        if data[4] == my_player and data[0] == TYPE_FACTORY:
+        if data[4] != my_player:
+            STATE["enemy_pos"][uid] = (data[1], data[2], STATE["turn"])
+        elif data[0] == TYPE_FACTORY:
             pos = (data[1], data[2])
-            if STATE["last_factory_pos"] is not None:
-                if pos == STATE["last_factory_pos"]:
+            if STATE["factory_last_pos"] is not None:
+                if pos == STATE["factory_last_pos"]:
                     STATE["factory_stuck"] += 1
                 else:
                     STATE["factory_stuck"] = 0
-            STATE["last_factory_pos"] = pos
-            break
+            STATE["factory_last_pos"] = pos
 
 
-def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=300):
+# ─── Scroll Speed Prediction ──────────────────────────────────────────────
+
+def scroll_interval(step, config):
+    """How many steps between scrolls at current game step."""
+    start = getattr(config, 'scrollStartInterval', 4)
+    end = getattr(config, 'scrollEndInterval', 1)
+    ramp = getattr(config, 'scrollRampSteps', 400)
+    if step >= ramp:
+        return end
+    ratio = step / ramp
+    return max(1, int(start - (start - end) * ratio))
+
+
+def danger_level(factory_row, south_bound, step, config):
+    """How many rows of safety margin in next 20 steps."""
+    rows_above = factory_row - south_bound
+    scrolls = sum(1 for s in range(step, step + 20)
+                  if s % max(1, scroll_interval(s, config)) == 0)
+    return rows_above - scrolls
+
+
+# ─── BFS ──────────────────────────────────────────────────────────────────
+
+def bfs_first_step(start, goals, obs, config, max_nodes=500):
+    """BFS using wall memory. Returns first direction to reach any goal."""
     if not goals:
         return None
     goal_set = set(goals)
@@ -95,7 +138,7 @@ def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=300):
             best_dist = dist
             best_fd = first_d
         for d in ("NORTH", "EAST", "WEST", "SOUTH"):
-            if not passable_fn(obs, config, cur[0], cur[1], d):
+            if not can_go(cur[0], cur[1], d, obs, config):
                 continue
             dc, dr, _ = DIRS[d]
             nxt = (cur[0] + dc, cur[1] + dr)
@@ -111,10 +154,16 @@ def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=300):
     return best_fd
 
 
-def bfs_to_row(start, row, obs, config, passable_fn):
+def bfs_to_row(start, row, obs, config):
     goals = [(c, row) for c in range(config.width) if in_bounds(c, row, obs, config)]
-    return bfs_first_step(start, goals, obs, config, passable_fn)
+    return bfs_first_step(start, goals, obs, config)
 
+
+def bfs_to_pos(start, goal, obs, config):
+    return bfs_first_step(start, [goal], obs, config)
+
+
+# ─── Movement Helpers ─────────────────────────────────────────────────────
 
 def friendly_at(occupied, cell, my_player):
     return any(o[1][4] == my_player for o in occupied.get(cell, []))
@@ -131,47 +180,44 @@ def try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
 
 
 def factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
-    """Factory movement: ignores friendly units (crushes them), only checks walls and reserved targets."""
     dc, dr, _ = DIRS[d]
     nxt = (c + dc, r + dr)
     if nxt in reserved:
         return False
-    # Don't crush our own units if they have no escape (wasteful)
-    # But DO move if the cell is clear or has only enemies (crush them)
     occ = occupied.get(nxt, [])
     friendlies = [o for o in occ if o[1][4] == my_player and o[1][0] != TYPE_FACTORY]
     if friendlies:
-        # Check if ALL friendlies there have been assigned a move action (will move away)
         all_moving = all(o[0] in actions and actions[o[0]] in DIRS for o in friendlies)
         if not all_moving:
-            return False  # Would crush our own unit that isn't moving
+            return False
     actions[uid] = d
     reserved.add(nxt)
     return True
 
 
-def move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, target_row=None):
-    """Non-factory unit: move toward north using BFS + greedy fallback."""
-    if target_row is None:
-        target_row = r + 1
-    target_row = min(obs.northBound, target_row)
-
-    step = bfs_to_row((c, r), target_row, obs, config, can_go)
+def move_toward(uid, c, r, goals, obs, config, actions, reserved, occupied, my_player):
+    """Try BFS toward goals, then greedy fallback."""
+    step = bfs_first_step((c, r), goals, obs, config)
     if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
         return True
-
-    width = config.width
-    center = width // 4
-    ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
-    for d in ["NORTH"] + ew + ["SOUTH"]:
-        if can_go(obs, config, c, r, d):
-            if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
-                return True
-
     return False
 
 
-# ─── Factory ─────────────────────────────────────────────────────────────
+def move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, target_row=None):
+    if target_row is None:
+        target_row = r + 1
+    target_row = min(obs.northBound, target_row)
+    step = bfs_to_row((c, r), target_row, obs, config)
+    if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+        return True
+    for d in ["NORTH", "EAST", "WEST", "SOUTH"]:
+        if can_go(c, r, d, obs, config):
+            if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
+                return True
+    return False
+
+
+# ─── Factory ──────────────────────────────────────────────────────────────
 
 def factory_action(uid, data, obs, config, actions, reserved, occupied, my_player):
     c, r, energy = data[1], data[2], data[3]
@@ -183,28 +229,31 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     stuck = STATE["factory_stuck"]
     width = config.width
 
-    # Count units
+    danger = danger_level(r, obs.southBound, turn, config)
+    emergency = turn >= 400 or danger <= 2
+
     scout_count = sum(1 for d in obs.robots.values()
                       if d[4] == my_player and d[0] == TYPE_SCOUT)
     worker_count = sum(1 for d in obs.robots.values()
                        if d[4] == my_player and d[0] == TYPE_WORKER)
     miner_count = sum(1 for d in obs.robots.values()
                       if d[4] == my_player and d[0] == TYPE_MINER)
-    my_mines = sum(1 for k, v in getattr(obs, "mines", {}).items() if v[2] == my_player)
+    has_nodes = bool(getattr(obs, "miningNodes", {})) or bool(STATE["nodes"])
 
-    # ── JUMP ──
+    # ── JUMP ── (danger-aware)
     if jump_cd == 0 and turn > 2 and in_bounds(c, r + 2, obs, config):
         should_jump = False
         if gap <= 2:
+            should_jump = True
+        elif danger <= 3:
             should_jump = True
         elif stuck >= 2:
             should_jump = True
         else:
             w = wb(obs, config, c, r)
             if w is not None and (w & BIT_N):
-                if not can_go(obs, config, c, r, "EAST") and not can_go(obs, config, c, r, "WEST"):
+                if not can_go(c, r, "EAST", obs, config) and not can_go(c, r, "WEST", obs, config):
                     should_jump = True
-
         if should_jump:
             lr = r + 2
             landing = wb(obs, config, c, lr)
@@ -214,69 +263,66 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 return
             else:
                 for d in ("NORTH", "EAST", "WEST", "SOUTH"):
-                    if can_go(obs, config, c, lr, d):
+                    if can_go(c, lr, d, obs, config):
                         actions[uid] = "JUMP_NORTH"
                         reserved.add((c, lr))
                         return
 
-    # ── MOVE ── (uses factory_try_move which handles friendly crushing)
+    # ── MOVE ──
     if move_cd == 0:
-        center = width // 4
-        ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
-
-        # Tier 1: Direct NORTH if no known wall
-        if can_go(obs, config, c, r, "NORTH"):
+        # Direct NORTH
+        if can_go(c, r, "NORTH", obs, config):
             if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player):
                 return
 
-        # Tier 2: BFS to row+2, but only accept non-south first steps
-        step = bfs_to_row((c, r), r + 2, obs, config, can_go)
+        # BFS to row ahead
+        target_row = min(obs.northBound, r + 1)
+        step = bfs_to_row((c, r), target_row, obs, config)
         if step:
             dc, dr, _ = DIRS[step]
-            if dr >= 0:  # NORTH, EAST, or WEST only
+            if dr >= 0:
                 if factory_try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
                     return
 
-        # Tier 3: Forced lateral — try EAST/WEST even if BFS didn't find them
+        # Lateral
+        center = width // 4
+        ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
         for d in ew:
-            if can_go(obs, config, c, r, d):
+            if can_go(c, r, d, obs, config):
                 if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return
 
-        # Tier 4: Diagonal — go EAST/WEST if the cell north of that is open
+        # Diagonal
         for d in ew:
-            if can_go(obs, config, c, r, d):
+            if can_go(c, r, d, obs, config):
                 dc, dr, _ = DIRS[d]
                 side = (c + dc, r)
-                if can_go(obs, config, side[0], side[1], "NORTH"):
+                if can_go(side[0], side[1], "NORTH", obs, config):
                     if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                         return
 
-        # Tier 5: BFS allowing south (when stuck >= 3)
+        # BFS allowing south when stuck
         if stuck >= 3:
-            step = bfs_to_row((c, r), r + 2, obs, config, can_go)
+            step = bfs_to_row((c, r), r + 1, obs, config)
             if step:
                 if factory_try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
                     return
 
-        # Tier 6: SOUTH as last resort
+        # SOUTH last resort
         if stuck >= 4 and gap >= 3:
-            if can_go(obs, config, c, r, "SOUTH"):
+            if can_go(c, r, "SOUTH", obs, config):
                 if factory_try_move(uid, c, r, "SOUTH", obs, config, actions, reserved, occupied, my_player):
                     return
 
-    # ── BUILD (during move cooldown) ──
+    # ── BUILD ──
     if move_cd != 0 and build_cd == 0 and gap >= 2:
-        spawn_ok = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
+        spawn_ok = can_go(c, r, "NORTH", obs, config) and in_bounds(c, r + 1, obs, config)
         if spawn_ok:
             spawn = (c, r + 1)
             if not friendly_at(occupied, spawn, my_player):
-                scout_cost = getattr(config, "scoutCost", 50)
                 worker_cost = getattr(config, "workerCost", 200)
-                miner_cost = getattr(config, "minerCost", 300)
-                has_nodes = bool(getattr(obs, "miningNodes", {})) or bool(STATE["nodes"])
 
-                # Priority 2: Worker for wall clearing
+                # Worker for wall clearing
                 if worker_count < 1 and energy >= worker_cost + 100 and gap >= 2:
                     actions[uid] = "BUILD_WORKER"
                     reserved.add(spawn)
@@ -286,12 +332,70 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     reserved.add((c, r))
 
 
-# ─── Worker ─────────────────────────────────────────────────────────────
+# ─── Scout ────────────────────────────────────────────────────────────────
+
+def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player):
+    c, r, energy = data[1], data[2], data[3]
+    move_cd = data[5] if len(data) > 5 else 0
+
+    if move_cd != 0:
+        actions[uid] = "IDLE"
+        reserved.add((c, r))
+        return
+
+    # Energy transfer to nearby friendly when nearly full
+    max_e = getattr(config, 'scoutMaxEnergy', 100)
+    if energy >= max_e * 0.8:
+        for d in ("NORTH", "EAST", "WEST", "SOUTH"):
+            dc, dr, _ = DIRS[d]
+            nc, nr = c + dc, r + dr
+            if can_go(c, r, d, obs, config):
+                for occ_uid, occ_data in occupied.get((nc, nr), []):
+                    if occ_data[4] == my_player:
+                        actions[uid] = f"TRANSFER_{d}"
+                        reserved.add((c, r))
+                        return
+
+    # Find nearest mining node (for Miner economy)
+    vis_nodes = [parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {})]
+    if vis_nodes:
+        nearest = min(vis_nodes, key=lambda n: abs(n[0] - c) + abs(n[1] - r))
+        step = bfs_to_pos((c, r), nearest, obs, config)
+        if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+            return
+
+    # Collect crystals
+    crystals = [(parse_key(k), v) for k, v in (getattr(obs, "crystals", {}) or {}).items()]
+    if crystals:
+        best = max(crystals, key=lambda cv: cv[1] / max(1, abs(cv[0][0] - c) + abs(cv[0][1] - r)))
+        step = bfs_to_pos((c, r), best[0], obs, config)
+        if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+            return
+
+    # Explore ahead of factory
+    factory_pos = None
+    for uid2, d2 in obs.robots.items():
+        if d2[4] == my_player and d2[0] == TYPE_FACTORY:
+            factory_pos = (d2[1], d2[2])
+            break
+    if factory_pos:
+        target_row = min(obs.northBound, factory_pos[1] + 6)
+        if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, target_row):
+            return
+
+    # Default north
+    if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
+        return
+
+    actions[uid] = "IDLE"
+    reserved.add((c, r))
+
+
+# ─── Worker ───────────────────────────────────────────────────────────────
 
 def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player):
     c, r, energy = data[1], data[2], data[3]
     move_cd = data[5] if len(data) > 5 else 0
-    gap = r - obs.southBound
     wall_cost = getattr(config, "wallRemoveCost", 100)
 
     factory_pos = None
@@ -303,23 +407,25 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
     # Escape factory's north cell
     if factory_pos and (c, r) == (factory_pos[0], factory_pos[1] + 1):
         for d in ("NORTH", "EAST", "WEST"):
-            if can_go(obs, config, c, r, d):
+            if can_go(c, r, d, obs, config):
                 if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return
 
-    # Remove walls blocking factory's north path
-    if factory_pos and energy >= wall_cost + 20:
+    # Remove walls near factory path
+    if factory_pos and energy >= wall_cost:
         fc, fr = factory_pos
-        if c == fc and r == fr + 1:
-            w = wb(obs, config, c, r)
-            if w is not None and (w & BIT_N):
+        # On factory's north path: clear north walls
+        if c == fc and r >= fr:
+            w = wb(obs, config, c, r) or 0
+            if w & BIT_N:
                 actions[uid] = "REMOVE_NORTH"
                 reserved.add((c, r))
                 return
+        # Near factory: clear any blocking wall
         if abs(c - fc) + abs(r - fr) <= 2:
+            w = wb(obs, config, c, r) or 0
             for d, bit in [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]:
-                w = wb(obs, config, c, r)
-                if w is not None and (w & bit):
+                if w & bit:
                     actions[uid] = f"REMOVE_{d}"
                     reserved.add((c, r))
                     return
@@ -329,7 +435,7 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
         reserved.add((c, r))
         return
 
-    # Follow factory
+    # Follow factory path
     target_row = r + 1
     if factory_pos:
         target_row = min(obs.northBound, factory_pos[1] + 2)
@@ -339,20 +445,17 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
     actions[uid] = "IDLE"
     reserved.add((c, r))
 
-    actions[uid] = "IDLE"
-    reserved.add((c, r))
 
-
-# ─── Miner ──────────────────────────────────────────────────────────────
+# ─── Miner ────────────────────────────────────────────────────────────────
 
 def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player):
     c, r, energy = data[1], data[2], data[3]
     move_cd = data[5] if len(data) > 5 else 0
     transform_cost = getattr(config, "transformCost", 100)
 
-    # TRANSFORM on visible mining node
-    visible_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
-    if (c, r) in visible_nodes and energy >= transform_cost + 1:
+    # TRANSFORM on mining node immediately
+    vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
+    if (c, r) in vis_nodes and energy >= transform_cost + 1:
         actions[uid] = "TRANSFORM"
         reserved.add((c, r))
         return
@@ -362,19 +465,19 @@ def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
         reserved.add((c, r))
         return
 
-    # Find mining node
+    # Find nearest mining node
     mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
-    vis_list = [n for n in visible_nodes if n not in mines]
+    vis_list = [n for n in vis_nodes if n not in mines]
     rem_list = [n for n in STATE["nodes"] if n not in mines and in_bounds(n[0], n[1], obs, config)]
     all_nodes = vis_list + rem_list
 
     if all_nodes:
         target = min(all_nodes, key=lambda n: abs(n[0] - c) + abs(n[1] - r))
-        step = bfs_first_step((c, r), [target], obs, config, can_go)
+        step = bfs_first_step((c, r), [target], obs, config)
         if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
             return
 
-    # Follow factory
+    # No nodes: follow factory
     if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
         return
 
@@ -382,65 +485,7 @@ def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
     reserved.add((c, r))
 
 
-# ─── Scout ──────────────────────────────────────────────────────────────
-
-def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player):
-    c, r, energy = data[1], data[2], data[3]
-    move_cd = data[5] if len(data) > 5 else 0
-    gap = r - obs.southBound
-
-    if move_cd != 0:
-        actions[uid] = "IDLE"
-        reserved.add((c, r))
-        return
-
-    # Collect nearby crystals
-    crystals = [(parse_key(k), v) for k, v in (getattr(obs, "crystals", {}) or {}).items()]
-    if crystals:
-        best = max(
-            [(v / max(1, abs(cell[0] - c) + abs(cell[1] - r)), cell)
-             for cell, v in crystals if cell != (c, r)],
-            key=lambda x: x[0],
-            default=None,
-        )
-        if best:
-            _, target = best
-            step = bfs_first_step((c, r), [target], obs, config, can_go)
-            if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
-                return
-
-    # Explore ahead of factory
-    factory_pos = None
-    for uid2, d2 in obs.robots.items():
-        if d2[4] == my_player and d2[0] == TYPE_FACTORY:
-            factory_pos = (d2[1], d2[2])
-            break
-
-    if factory_pos:
-        fc, fr = factory_pos
-        # Scout goes 5-8 cells ahead
-        target_row = min(obs.northBound, fr + 6)
-        # Spread scouts: alternate between center-ish and side exploration
-        scout_idx = sum(1 for d in obs.robots.values()
-                        if d[4] == my_player and d[0] == TYPE_SCOUT and d[1] == c and d[2] == r)
-        half = config.width // 2
-        if c < half:
-            target_col = min(half - 1, c + 3)
-        else:
-            target_col = max(half, c - 3)
-        step = bfs_first_step((c, r), [(target_col, target_row)], obs, config, can_go)
-        if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
-            return
-
-    # Default: move north
-    if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
-        return
-
-    actions[uid] = "IDLE"
-    reserved.add((c, r))
-
-
-# ─── Main ────────────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────
 
 def agent(obs, config):
     my_player = obs.player
@@ -450,10 +495,9 @@ def agent(obs, config):
     reserved = set()
     occupied = {}
     for uid, data in obs.robots.items():
-        cell = (data[1], data[2])
-        occupied.setdefault(cell, []).append((uid, data))
+        occupied.setdefault((data[1], data[2]), []).append((uid, data))
 
-    # Process non-factory units FIRST so they escape the factory's path
+    # Process non-factory units first so they can escape factory's path
     for uid, data in obs.robots.items():
         if data[4] == my_player and data[0] == TYPE_SCOUT:
             scout_action(uid, data, obs, config, actions, reserved, occupied, my_player)
@@ -466,7 +510,7 @@ def agent(obs, config):
         if uid not in actions and data[4] == my_player and data[0] == TYPE_MINER:
             miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
 
-    # Factory LAST: now units have their actions, factory can safely move through
+    # Factory last
     for uid, data in obs.robots.items():
         if data[4] == my_player and data[0] == TYPE_FACTORY:
             factory_action(uid, data, obs, config, actions, reserved, occupied, my_player)
