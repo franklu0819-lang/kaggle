@@ -1,9 +1,9 @@
-"""v6 agent: earlier lateral movement when stuck, on v1 base.
+"""v8 agent: v6 base + dead-end detection + precise ROI.
 
-Key changes:
-- When stuck>=1: expand BFS goals from row+2 to rows r+1..r+4 (find longer lateral detours)
-- When stuck>=2: add lateral-escape BFS (find nearest cell with open north path)
-- Keep all south movement tiers exactly as v1
+Changes from v6:
+1. Dead-end detection: Tier 1 skips cells with no exit (N/E/W all blocked)
+2. Precise ROI: BFS to approach cell (mc, mr-1) not mine node, use row_gain
+3. Mine distance filter: skip candidates with d > 10
 """
 from collections import deque
 
@@ -157,8 +157,6 @@ def bfs_distance(start, goal, obs, config, passable_fn, max_nodes=300):
 
 
 def calc_mine_roi(mine_node, factory_c, factory_r, gap, step, obs, config):
-    """Calculate expected energy output from investing in a mine node.
-    Returns expected_output (energy), or 0 if not viable."""
     mc, mr = mine_node
     approach = (mc, mr - 1)
     if approach[1] < factory_r or not in_bounds(mc, approach[1], obs, config):
@@ -351,6 +349,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             roi = calc_mine_roi(node, c, r, gap, turn, obs, config)
             if roi >= roi_threshold:
                 d = abs(node[0] - c) + abs(node[1] - r)
+                if d > 10:
+                    continue
                 candidates.append((d, node))
         if candidates:
             candidates.sort()
@@ -514,11 +514,16 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         # failure mode). When the scroll truly threatens us, gap<=3 takes over.
         panic = (gap <= 3) or must_escape
 
-        # Tier 1: Direct NORTH if no known wall
-        if can_go(obs, config, c, r, "NORTH"):
-            if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
-                                                allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                return
+        # Tier 1: Direct NORTH if no known wall (skip if dead end)
+        north_target = (c, r + 1) if can_go(obs, config, c, r, "NORTH") else None
+        if north_target:
+            is_dead_end = not (can_go(obs, config, c, r + 1, "NORTH")
+                              or can_go(obs, config, c, r + 1, "EAST")
+                              or can_go(obs, config, c, r + 1, "WEST"))
+            if not is_dead_end:
+                if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
+                                                    allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                    return
 
         # Tier 2: BFS to goals (mine target + row+2), wider search when stuck
         bfs_limit = 600 if stuck >= 1 else 300
@@ -541,7 +546,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         return
 
         # Tier 2c: Lateral escape BFS when stuck — find nearest cell with open north
-        if stuck >= 2:
+        if stuck >= 1:
             lateral_goals = []
             for cc in range(width):
                 if cc == c:
@@ -582,6 +587,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         if stuck >= 3:
             step_dir = bfs_first_step((c, r), goals, obs, config, can_go)
             if step_dir:
+                dc2, dr2, _ = DIRS[step_dir]
                 if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
                                     allow_crush=True, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                     return
@@ -613,7 +619,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
 
                 # Build Miner: factory must be at (mc, mr-1) so miner spawns ON the node
-                if mine_target and energy >= 500:
+                if mine_target and energy >= 600:
                     mc, mr = mine_target
                     if (c, r) == (mc, mr - 1) and spawn_ok:
                         has_miner = any(

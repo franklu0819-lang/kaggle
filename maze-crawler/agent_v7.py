@@ -359,104 +359,188 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
 
     # ── JUMP ── (aggressive: always JUMP when available, like v2)
     if jump_cd == 0 and turn > 2 and in_bounds(c, r + 2, obs, config):
-        # Try JUMP_NORTH first. Only avoid landing on enemy factory cell.
+        # Only land in enemy danger as a true last resort
+        allow_danger_jump = (gap <= 3)
+
+        # Try JUMP_NORTH first. NEVER land on enemy factory cell (hard_block).
         lr = r + 2
         if (in_bounds(c, lr, obs, config)
-                and (c, lr) not in enemy_hard_block):
-            actions[uid] = "JUMP_NORTH"
-            reserved.add((c, lr))
-            return
+                and (c, lr) not in enemy_hard_block
+                and ((c, lr) not in enemy_danger or allow_danger_jump)):
+            landing = wb(obs, config, c, lr)
+            if landing is None:
+                actions[uid] = "JUMP_NORTH"
+                reserved.add((c, lr))
+                return
+            else:
+                for d in ("NORTH", "EAST", "WEST", "SOUTH"):
+                    if can_go(obs, config, c, lr, d):
+                        actions[uid] = "JUMP_NORTH"
+                        reserved.add((c, lr))
+                        return
 
-        # Lateral jumps as fallback
+        # Lateral jumps as fallback (not just emergency)
         for jd, (jdc, jdr) in (("JUMP_EAST", (2, 0)), ("JUMP_WEST", (-2, 0))):
             lc, lr2 = c + jdc, r + jdr
             if not in_bounds(lc, lr2, obs, config):
                 continue
             if (lc, lr2) in enemy_hard_block:
+                continue  # never crash into enemy factory
+            if (lc, lr2) in enemy_danger and not allow_danger_jump:
                 continue
-            actions[uid] = jd
-            reserved.add((lc, lr2))
+            landing = wb(obs, config, lc, lr2)
+            if landing is None:
+                actions[uid] = jd
+                reserved.add((lc, lr2))
+                return
+            else:
+                for d in ("NORTH", "EAST", "WEST"):
+                    if can_go(obs, config, lc, lr2, d):
+                        actions[uid] = jd
+                        reserved.add((lc, lr2))
+                        return
+
+    # ── MOVE ── (uses factory_try_move which handles friendly crushing)
+    if move_cd == 0:
+        # ── Check if we should stay at an existing mine ──
+        my_mines_nearby = []
+        for mk, mv in getattr(obs, "mines", {}).items():
+            mc2, mr2 = parse_key(mk)
+            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
+                my_mines_nearby.append((mc2, mr2))
+
+        # ── Check mine_wait: waiting for miner to TRANSFORM ──
+        if STATE["mine_wait"]:
+            mine_exists_nearby = any(
+                mv[2] == my_player and abs(parse_key(mk)[0] - c) + abs(parse_key(mk)[1] - r) <= 1
+                for mk, mv in getattr(obs, "mines", {}).items()
+            )
+            waited = turn - STATE["mine_wait_since"]
+            if mine_exists_nearby:
+                STATE["mine_wait"] = False
+                # Don't return — fall through to my_mines_nearby collection logic
+            elif waited > 5 or gap <= 2:
+                # Timeout or danger — give up waiting
+                STATE["mine_wait"] = False
+                STATE["mine_invested"] = None
+            elif gap > 2:
+                # Stay put, wait for miner
+                actions[uid] = "IDLE"
+                reserved.add((c, r))
+                return
+
+        if my_mines_nearby and gap > 2:
+            # Stay and collect energy — move onto mine cell if not already
+            mc2, mr2 = my_mines_nearby[0]
+            if (mc2, mr2) == (c, r):
+                actions[uid] = "IDLE"
+                reserved.add((c, r))
+                return
+            # Try to step onto the mine (allow_danger=True since mine is critical
+            # and (mc2,mr2) is rarely in enemy zone — but allow risk if it is).
+            for d in ("NORTH", "EAST", "WEST", "SOUTH"):
+                dc2, dr2, _ = DIRS[d]
+                if (c + dc2, r + dr2) == (mc2, mr2):
+                    if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
+                                                            danger=enemy_danger, allow_danger=True, hard_block=enemy_hard_block):
+                        return
+            # Can't reach mine cell, just idle
+            actions[uid] = "IDLE"
+            reserved.add((c, r))
             return
 
-    # ── MOVE ── (simple tiers, danger avoidance to prevent factory collisions)
-    if move_cd == 0:
-        # ── Mine wait/collection removed: factory never IDLEs for mines ──
-        if STATE["mine_wait"]:
-            STATE["mine_wait"] = False
+        if my_mines_nearby and gap <= 2:
+            # Must leave — clear mine_invested
             STATE["mine_invested"] = None
 
         center = width // 4
         ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
 
-        # BFS goals: navigate northward to row+2
+        # Build BFS goals with mine target fusion
         north_goals = [(c2, r + 2) for c2 in range(width) if in_bounds(c2, r + 2, obs, config)]
+        goals = north_goals
+        if mine_target:
+            # Navigate to cell SOUTH of mine node so miner spawns ON the node
+            approach = (mine_target[0], mine_target[1] - 1)
+            if approach[1] >= r and in_bounds(approach[0], approach[1], obs, config):
+                goals = [approach] + goals
+            else:
+                goals = [mine_target] + goals
 
-        # Danger avoidance: avoid enemy factory danger zone unless scroll pressure is high
-        panic = (gap <= 3) or (c, r) in enemy_danger
-
-        def _move_ok(d):
-            dc, dr, _ = DIRS[d]
-            nxt = (c + dc, r + dr)
-            if nxt in enemy_hard_block:
-                return False
-            if nxt in enemy_danger and not panic:
-                return False
-            return True
+        # If our current cell is in enemy reach, IDLE is itself unsafe — we
+        # must move, even into another danger cell (anything is better than
+        # standing still while enemy walks/jumps onto us).
+        must_escape = (c, r) in enemy_danger
+        # When stuck, low gap, or about to be hit, allow crushing own units
+        crush = (stuck >= 1) or (gap <= 3) or must_escape
+        # Allow stepping into enemy danger only when scroll pressure is genuinely
+        # high (gap<=3) OR we already sit on a cell the enemy will reach.
+        # NOTE: We deliberately do NOT include `stuck` here — stuck-because-of-
+        # enemy-avoidance is the desired behaviour. If we counted stuck, the
+        # factory would IDLE three turns to dodge a JUMP threat and then walk
+        # straight into the JUMP-landing on turn 4 (this is the seed 6344
+        # failure mode). When the scroll truly threatens us, gap<=3 takes over.
+        panic = (gap <= 3) or must_escape
 
         # Tier 1: Direct NORTH if no known wall
-        if can_go(obs, config, c, r, "NORTH") and _move_ok("NORTH"):
-            dc, dr, _ = DIRS["NORTH"]
-            actions[uid] = "NORTH"
-            reserved.add((c + dc, r + dr))
-            return
+        if can_go(obs, config, c, r, "NORTH"):
+            if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
+                                                allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                return
 
-        # Tier 2: BFS to row+2 (optimistic)
+        # Tier 2: BFS to goals (mine target + row+2), wider search when stuck
         bfs_limit = 500
-        step_dir = bfs_first_step((c, r), north_goals, obs, config, can_go, max_nodes=bfs_limit)
+        step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=bfs_limit)
         if step_dir:
             dc2, dr2, _ = DIRS[step_dir]
-            if dr2 >= 0 and _move_ok(step_dir):
-                actions[uid] = step_dir
-                reserved.add((c + dc2, r + dr2))
-                return
-
-        # Tier 3: Lateral
-        for d in ew:
-            if can_go(obs, config, c, r, d) and _move_ok(d):
-                dc, dr, _ = DIRS[d]
-                actions[uid] = d
-                reserved.add((c + dc, r + dr))
-                return
-
-        # Tier 4: BFS (pessimistic) when stuck
-        if stuck >= 2:
-            step_dir = bfs_first_step((c, r), north_goals, obs, config, can_go_pessimistic, max_nodes=bfs_limit)
-            if step_dir:
-                dc2, dr2, _ = DIRS[step_dir]
-                if dr2 >= 0 and _move_ok(step_dir):
-                    actions[uid] = step_dir
-                    reserved.add((c + dc2, r + dr2))
+            if dr2 >= 0:  # NORTH, EAST, or WEST only
+                if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
+                                                    allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                     return
 
-        # Tier 5: Panic fallback — accept danger cells to escape scroll
-        if panic:
-            for d in ("NORTH", "EAST", "WEST", "SOUTH"):
-                if can_go(obs, config, c, r, d):
-                    dc, dr, _ = DIRS[d]
-                    nxt = (c + dc, r + dr)
-                    if nxt not in enemy_hard_block:
-                        actions[uid] = d
-                        reserved.add(nxt)
+        # Tier 2b: Pessimistic BFS when stuck (known-safe routes only)
+        if stuck >= 2:
+            step_dir = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=bfs_limit)
+            if step_dir:
+                dc2, dr2, _ = DIRS[step_dir]
+                if dr2 >= 0:
+                    if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
+                                                        allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                         return
 
-        # Tier 6: SOUTH as absolute last resort
+        # Tier 3: Forced lateral
+        for d in ew:
+            if can_go(obs, config, c, r, d):
+                if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
+                                                    allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                    return
+
+        # Tier 4: Diagonal
+        for d in ew:
+            if can_go(obs, config, c, r, d):
+                dc2, dr2, _ = DIRS[d]
+                side = (c + dc2, r)
+                if can_go(obs, config, side[0], side[1], "NORTH"):
+                    if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
+                                                        allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                        return
+
+        # Tier 5: BFS allowing south (stuck >= 3). Stuck recovery without
+        # crashing into an enemy factory: keep allow_danger=panic so we still
+        # IDLE in preference to a guaranteed factory collision when scroll
+        # pressure is low.
+        if stuck >= 3:
+            step_dir = bfs_first_step((c, r), goals, obs, config, can_go)
+            if step_dir:
+                if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
+                                    allow_crush=True, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                    return
+
+        # Tier 6: SOUTH as last resort
         if stuck >= 4 and gap >= 3:
             if can_go(obs, config, c, r, "SOUTH"):
-                dc, dr, _ = DIRS["SOUTH"]
-                nxt = (c + dc, r + dr)
-                if nxt not in enemy_hard_block:
-                    actions[uid] = "SOUTH"
-                    reserved.add(nxt)
+                if factory_try_move(uid, c, r, "SOUTH", obs, config, actions, reserved, occupied, my_player,
+                                    allow_crush=True, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                     return
 
     # ── BUILD (during move cooldown) ──
@@ -465,6 +549,19 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         if spawn_ok:
             spawn = (c, r + 1)
             if not friendly_at(occupied, spawn, my_player):
+                # Check if we have an existing mine nearby to collect from
+                my_mines_nearby_build = []
+                for mk, mv in getattr(obs, "mines", {}).items():
+                    mc2, mr2 = parse_key(mk)
+                    if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
+                        my_mines_nearby_build.append((mc2, mr2))
+
+                if my_mines_nearby_build and gap > 2:
+                    # Keep collecting energy
+                    actions[uid] = "IDLE"
+                    reserved.add((c, r))
+                    return
+
                 # Build Miner: factory must be at (mc, mr-1) so miner spawns ON the node
                 if mine_target and energy >= 600:
                     mc, mr = mine_target
@@ -480,10 +577,13 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                # Build Worker: only when energy is abundant and factory is safe
-                if energy >= 1500 and gap >= 8:
-                    max_workers = 1
-                    if worker_count < max_workers:
+                # Build Worker: normal early, rebuild mid/late, multiple allowed after step 400
+                max_workers = 2 if turn > 400 else 1
+                if worker_count < max_workers:
+                    can_build = (energy >= 500 and (turn < 150 or energy >= 700))
+                    if not can_build and turn >= 100 and energy >= 400:
+                        can_build = True
+                    if can_build:
                         actions[uid] = "BUILD_WORKER"
                         reserved.add(spawn)
                         return
