@@ -33,6 +33,7 @@ def get_state_reset():
         "mine_invested": None,
         "mine_wait": False,
         "mine_wait_since": 0,
+        "last_build_turn": -999,
     }
 
 

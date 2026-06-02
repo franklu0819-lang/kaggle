@@ -3,7 +3,6 @@
 Changes from v7:
 1. Remove lateral jumps (JUMP_EAST/JUMP_WEST) — only JUMP_NORTH
 2. Sync v8 mine ROI: approach cell (mc, mr-1), row_gain, energy-gated thresholds
-3. Mine distance filter: skip candidates with d > 10
 """
 from collections import deque
 
@@ -16,6 +15,7 @@ STATE = {
     "mine_invested": None,
     "mine_wait": False,       # True after BUILD_MINER, wait for mine to appear
     "mine_wait_since": 0,    # turn when we started waiting
+    "last_build_turn": -999,  # track when we last built a unit
 }
 
 TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER = 0, 1, 2, 3
@@ -247,6 +247,11 @@ def move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player, t
     width = config.width
     center = width // 4
     ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
+    crystals = getattr(obs, "crystals", {}) or {}
+    if f"{c+1},{r+1}" in crystals and f"{c-1},{r+1}" not in crystals:
+        ew = ["EAST", "WEST"]
+    elif f"{c-1},{r+1}" in crystals and f"{c+1},{r+1}" not in crystals:
+        ew = ["WEST", "EAST"]
     for d in ["NORTH"] + ew + ["SOUTH"]:
         if can_go(obs, config, c, r, d):
             if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
@@ -314,8 +319,6 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             roi = calc_mine_roi(node, c, r, gap, turn, obs, config)
             if roi >= roi_threshold:
                 d = abs(node[0] - c) + abs(node[1] - r)
-                if d > 10:
-                    continue
                 candidates.append((d, node))
         if candidates:
             candidates.sort()
@@ -323,7 +326,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             STATE["mine_invested"] = mine_target
 
     # ── JUMP (aggressive: always JUMP when available) ──
-    if jump_cd == 0 and turn > 2 and not STATE.get("mine_wait", False):
+    on_own_mine = panic_steps > 80 and turn < 100 and any(
+        mv[2] == my_player and parse_key(mk) == (c, r)
+        for mk, mv in getattr(obs, "mines", {}).items()
+    )
+    if jump_cd == 0 and turn > 2 and not STATE.get("mine_wait", False) and not on_own_mine:
         # Pre-compute danger escape for lateral jump decision
         move_targets = []
         for d_str in ("NORTH", "EAST", "WEST", "SOUTH"):
@@ -387,15 +394,15 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             waited = turn - STATE["mine_wait_since"]
             if mine_exists_nearby:
                 STATE["mine_wait"] = False
-            elif waited > 5 or gap <= 2:
+            elif waited > 5 or panic_steps <= 50:
                 STATE["mine_wait"] = False
                 STATE["mine_invested"] = None
-            elif gap > 2:
+            elif panic_steps > 50:
                 actions[uid] = "IDLE"
                 reserved.add((c, r))
                 return
 
-        if my_mines_nearby and gap > 2:
+        if my_mines_nearby and panic_steps > 50:
             mc2, mr2 = my_mines_nearby[0]
             if (mc2, mr2) == (c, r):
                 actions[uid] = "IDLE"
@@ -420,6 +427,16 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
 
     north_goals = [(c2, r + 2) for c2 in range(width) if in_bounds(c2, r + 2, obs, config)]
     goals = north_goals
+
+    # When stuck, add worker's forward positions as high-priority goals
+    if stuck >= 1:
+        for uid2, d2 in obs.robots.items():
+            if d2[4] == my_player and d2[0] == TYPE_WORKER:
+                wc, wr = d2[1], d2[2]
+                if wr > r:
+                    for rr in range(r + 1, min(wr + 2, obs.northBound + 1)):
+                        if in_bounds(wc, rr, obs, config):
+                            goals.insert(0, (wc, rr))
     if mine_target:
         approach = (mine_target[0], mine_target[1] - 1)
         if approach[1] >= r and in_bounds(approach[0], approach[1], obs, config):
@@ -428,9 +445,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             goals = [mine_target] + goals
 
     must_escape = (c, r) in enemy_danger
-    crush = (stuck >= 1) or (gap <= 3) or must_escape
+    fresh_worker = (turn - STATE.get("last_build_turn", -999)) <= 1
+    crush = not fresh_worker or (stuck >= 1) or (gap <= 3) or must_escape
     panic = (gap <= 3) or must_escape
-    bfs_limit = 500
 
     # Tier 1: Direct NORTH (MOVE)
     if move_cd == 0 and can_go(obs, config, c, r, "NORTH"):
@@ -438,27 +455,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
             return
 
-    # Tier 1b: Lateral escape BFS (MOVE)
+    # Tier 2: Pessimistic BFS to goals (MOVE)
     if move_cd == 0:
-        lateral_goals = []
-        for cc in range(width):
-            if cc == c:
-                continue
-            for rc in range(max(r - 1, obs.southBound), min(r + 3, obs.northBound + 1)):
-                if in_bounds(cc, rc, obs, config) and can_go(obs, config, cc, rc, "NORTH"):
-                    lateral_goals.append((cc, rc))
-        if lateral_goals:
-            step_dir = bfs_first_step((c, r), lateral_goals, obs, config, can_go, max_nodes=600)
-            if step_dir:
-                dc2, dr2, _ = DIRS[step_dir]
-                if dr2 >= 0:
-                    if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
-                                        allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                        return
-
-    # Tier 2: BFS to goals (MOVE)
-    if move_cd == 0:
-        step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=bfs_limit)
+        step_dir = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=500)
         if step_dir:
             dc2, dr2, _ = DIRS[step_dir]
             if dr2 >= 0:
@@ -466,48 +465,20 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                                     allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                     return
 
-    # Tier 2b: Pessimistic BFS (MOVE, stuck >= 2)
-    if move_cd == 0 and stuck >= 2:
-        step_dir = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=bfs_limit)
-        if step_dir:
-            dc2, dr2, _ = DIRS[step_dir]
-            if dr2 >= 0:
-                if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
-                                    allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                    return
-
-    # Tier 3: Forced lateral (MOVE)
+    # Tier 3: Unconditional lateral with crystal preference (MOVE)
     if move_cd == 0:
-        for d in ew:
-            if can_go(obs, config, c, r, d):
-                if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
-                                    allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                    return
-
-    # Tier 4: Diagonal (MOVE)
-    if move_cd == 0:
+        crystals = getattr(obs, "crystals", {}) or {}
+        lat_dirs = []
         for d in ew:
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
-                side = (c + dc2, r)
-                if can_go(obs, config, side[0], side[1], "NORTH"):
-                    if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
-                                        allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                        return
-
-    # Tier 5: BFS allowing south (MOVE, stuck >= 3)
-    if move_cd == 0 and stuck >= 3:
-        step_dir = bfs_first_step((c, r), goals, obs, config, can_go)
-        if step_dir:
-            if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
-                                allow_crush=True, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                return
-
-    # Tier 6: SOUTH (MOVE, stuck >= 4)
-    if move_cd == 0 and stuck >= 4 and gap >= 3:
-        if can_go(obs, config, c, r, "SOUTH"):
-            if factory_try_move(uid, c, r, "SOUTH", obs, config, actions, reserved, occupied, my_player,
-                                allow_crush=True, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                nc = c + dc2
+                has_crystal = f"{nc},{r+1}" in crystals
+                lat_dirs.append((0 if has_crystal else 1, d))
+        lat_dirs.sort()
+        for _, d in lat_dirs:
+            if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
+                                allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                 return
 
     # ── BUILD (during move cooldown) ──
@@ -537,6 +508,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         if not has_miner:
                             actions[uid] = "BUILD_MINER"
                             STATE["mine_wait"] = True
+                            STATE["last_build_turn"] = turn
                             STATE["mine_wait_since"] = turn
                             reserved.add(spawn)
                             return
@@ -548,6 +520,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         can_build = True
                     if can_build:
                         actions[uid] = "BUILD_WORKER"
+                        STATE["last_build_turn"] = turn
                         reserved.add(spawn)
                         return
 
@@ -581,7 +554,15 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 return
 
     if factory_pos and (c, r) == (factory_pos[0], factory_pos[1] + 1):
-        for d in ("NORTH", "EAST", "WEST"):
+        # Prefer lateral direction that leads to a cell with clear north
+        laterals = []
+        for d in ("EAST", "WEST"):
+            if can_go(obs, config, c, r, d):
+                dc2, dr2, _ = DIRS[d]
+                has_north = can_go(obs, config, c + dc2, r + dr2, "NORTH")
+                laterals.append((0 if has_north else 1, d))
+        laterals.sort()
+        for d in ["NORTH"] + [d for _, d in laterals]:
             if can_go(obs, config, c, r, d):
                 if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return
