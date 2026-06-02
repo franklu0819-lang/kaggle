@@ -554,7 +554,13 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 return
 
     if factory_pos and (c, r) == (factory_pos[0], factory_pos[1] + 1):
-        # Prefer lateral direction that leads to a cell with clear north
+        # Remove north wall first if blocking factory path
+        w = wb(obs, config, c, r)
+        if w is not None and (w & BIT_N) and energy >= wall_cost + 20:
+            actions[uid] = "REMOVE_NORTH"
+            reserved.add((c, r))
+            return
+        # Then try to move
         laterals = []
         for d in ("EAST", "WEST"):
             if can_go(obs, config, c, r, d):
