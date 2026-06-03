@@ -292,11 +292,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
     if panic_steps >= 100:
-        roi_threshold = 50
+        roi_threshold = 25
     elif panic_steps >= 50:
-        roi_threshold = 100
+        roi_threshold = 50
     elif panic_steps >= 25:
-        roi_threshold = 200
+        roi_threshold = 100
     else:
         roi_threshold = 9999
 
@@ -363,9 +363,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
             else:
                 # Require landing has a NORTH exit or ≥2 non-south exits
+                # Relax to ≥1 exit when low gap and stuck
                 landing_exits = sum(1 for d in ("NORTH", "EAST", "WEST") if can_go(obs, config, c, lr, d))
                 has_north = can_go(obs, config, c, lr, "NORTH")
-                if has_north or landing_exits >= 2:
+                min_exits = 1 if stuck >= 3 else 2
+                if has_north or landing_exits >= min_exits:
                     actions[uid] = "JUMP_NORTH"
                     reserved.add((c, lr))
                     return
@@ -501,7 +503,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             if has_lateral:
                 skip_tier12 = True
 
-    if not skip_tier12:
+    # Pre-check: if JUMP available next turn and no northward MOVE, wait for JUMP
+    wait_for_jump = (move_cd == 0 and jump_cd == 1 and not north_open and gap > 2
+                     and uid not in actions)
+
+    if not skip_tier12 and not wait_for_jump:
         # Tier 1: Direct NORTH (MOVE)
         if move_cd == 0 and north_open:
             if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
@@ -518,8 +524,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                                         allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                         return
             else:
-                # Tier 2.5: Optimistic BFS through fog when pessimistic fails
-                step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=500)
+                # Tier 2.5: Optimistic BFS through fog with wider goals when pessimistic fails
+                wide_goals = [(c2, row) for c2 in range(width) for row in range(r + 2, min(r + 8, obs.northBound + 1)) if in_bounds(c2, row, obs, config)]
+                step_dir = bfs_first_step((c, r), wide_goals, obs, config, can_go, max_nodes=1000)
                 if step_dir:
                     dc2, dr2, _ = DIRS[step_dir]
                     if dr2 >= 0 or (dr2 < 0 and stuck >= 3 and gap > 4):
@@ -534,17 +541,24 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
                 nc_lat = c + dc2
-                # BFS from lateral neighbor to find northward path
                 lat_goals = [(c2, r + 1) for c2 in range(width) if in_bounds(c2, r + 1, obs, config)]
                 north_step = bfs_first_step((nc_lat, r), lat_goals, obs, config, can_go, max_nodes=100)
                 has_north_path = north_step is not None
                 lat_dirs.append((0 if has_north_path else 1, d))
         lat_dirs.sort()
 
-        # Anti-oscillation: detect true 2-position oscillation (last 6 positions = 2 unique)
-        pos_history = list(STATE.get("factory_pos_history", deque()))[-6:]
-        is_oscillating = (len(pos_history) >= 6 and len(set(pos_history)) == 2
-                         and (c, r) in set(pos_history))
+        # Anti-oscillation: detect 2-position or 3-position oscillation
+        pos_history = list(STATE.get("factory_pos_history", deque()))[-8:]
+        is_oscillating = False
+        if len(pos_history) >= 6 and (c, r) in set(pos_history):
+            unique = len(set(pos_history))
+            if unique == 2 and len(pos_history) >= 6:
+                is_oscillating = True
+            elif unique == 3 and len(pos_history) >= 8:
+                # 3-position oscillation: each position appears 2+ times
+                from collections import Counter
+                counts = Counter(pos_history)
+                is_oscillating = all(v >= 2 for v in counts.values())
 
         if is_oscillating:
             # Skip lateral targets that are the OTHER oscillation position
@@ -583,7 +597,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                                     allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                     return
 
-    # Tier 4: South escape — backtrack when trapped with no forward options
+    # Tier 3.5: South escape — backtrack when trapped (before lateral)
     if move_cd == 0 and stuck >= 3 and gap > 3 and uid not in actions:
         if can_go(obs, config, c, r, "SOUTH"):
             if factory_try_move(uid, c, r, "SOUTH", obs, config, actions, reserved, occupied, my_player,
