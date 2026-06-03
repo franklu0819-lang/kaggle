@@ -11,7 +11,7 @@ Agent names:
 """
 import sys, os, time, copy
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, deque
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,6 +34,7 @@ def get_state_reset():
         "mine_wait": False,
         "mine_wait_since": 0,
         "last_build_turn": -999,
+        "factory_pos_history": deque(maxlen=8),
     }
 
 
@@ -71,7 +72,12 @@ def run_game(seed, p0_fn, p0_state, p1_fn, p1_state):
         p1_state.clear()
         p1_state.update(get_state_reset())
 
-    env = _make("crawl", configuration={"randomSeed": seed}, debug=True)
+    env = _make("crawl", configuration={
+        "randomSeed": seed,
+        "scrollStartInterval": 4,
+        "scrollEndInterval": 1,
+        "scrollRampSteps": 400,
+    }, debug=True)
     env.run([p0_fn, p1_fn])
     steps = env.steps
     total = len(steps)

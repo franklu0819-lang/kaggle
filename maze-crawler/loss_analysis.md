@@ -1,119 +1,206 @@
-# Loss Analysis Report — agent_v1 vs v15/v49/v50 (Updated)
+# Loss Analysis: agent_v1 (current best) vs Strong Opponents
 
-**Date**: 2025-05-26 (updated)
-**Baseline**: agent_v1 with enemy factory threat avoidance
-**Results**: 283W-15L-2D total (v15: 94W-6L, v49: 93W-5L-2D, v50: 96W-4L)
+Generated: 2026-05-26T15:05:56.547476
 
----
+## Summary
 
-## 1. Changes Since Previous Analysis
+| Opponent | W | L | D | Win Rate |
+|----------|---|---|---|----------|
+| v15 | 95 | 5 | 0 | 95.0% |
+| v49 | 91 | 8 | 1 | 91.0% |
+| v50 | 94 | 6 | 0 | 94.0% |
 
-### Applied: Enemy Factory Threat Avoidance
+## vs v15: 5 Losses
 
-Added `get_enemy_factory_threat()` + danger-aware `factory_try_move()` / `factory_action()`:
+- Death causes: {'SCROLL_OUT': 5}
+- Avg factory life: 430 steps
+- Avg gap range: 0.0 ~ 18.0
+- Avg stuck time: 161 steps per game
+- Games with mine: 0/5
+- Avg final energy: 202 (opp: 0)
 
-1. **Hard block**: Enemy factory current cell — NEVER enter (mutual destruction loses tiebreaker)
-2. **Danger zone**: Cells enemy could reach next turn (MOVE neighbors + JUMP landings), **only when cooldown is 0** (critical — without cooldown gating, factory retreats from distant enemies causing oscillation and scroll-out regression)
-3. **Panic mode**: `gap<=3` or `must_escape` (current cell in danger) — allows stepping into danger cells as last resort
-4. **danger_escape JUMP**: When all MOVE targets are dangerous, trigger JUMP even without other conditions
+### Individual Losses
 
-### Impact Summary
+**Seed 2645** (SCROLL_OUT, life=433)
+- gap: min=0 max=18 final=0
+- my E: min=111 final=111
+- workers: born@[4, 67, 242] died@[66, 240, 349]
+- **no mines built**
 
-| Opponent | Before Fix | After Fix | Change |
-|----------|-----------|-----------|--------|
-| v15 | 91W-7L-2D | 94W-6L-0D | +3W |
-| v49 | 92W-6L-2D | 93W-5L-2D | +1W |
-| v50 | 96W-4L-0D | 96W-4L-0D | unchanged |
-| **Total** | **279W-17L-4D** | **283W-15L-2D** | **+4W net** |
+**Seed 5111** (SCROLL_OUT, life=423)
+- gap: min=0 max=15 final=0
+- my E: min=342 final=342
+- workers: born@[8, 78] died@[75, 381]
+- **no mines built**
 
-**Fixed losses**: seeds 6344 (v15, JUMP collision at step 190), 7988 (v49, simultaneous move collision at step 113). Both were enemy-factory-collision type where the NN opponent actively jumped/moved into our factory cell.
+**Seed 6344** (SCROLL_OUT, life=402)
+- gap: min=0 max=19 final=0
+- my E: min=234 final=234 | opp E: final=0
+- workers: born@[2, 112] died@[93, 273]
+- **no mines built**
 
----
+**Seed 7440** (SCROLL_OUT, life=443)
+- gap: min=0 max=19 final=0
+- my E: min=264 final=264
+- workers: born@[2, 142] died@[141, 288]
+- **no mines built**
 
-## 2. Remaining Loss Games (15 total: all scroll-out)
+**Seed 8125** (SCROLL_OUT, life=451)
+- gap: min=0 max=19 final=0
+- my E: min=38 final=60
+- workers: born@[2, 53, 68] died@[46, 67, 156]
+- **no mines built**
 
-### vs v15 (6 losses)
 
-| Seed | Steps | Energy | Worker | Mine | Key Issue |
-|------|-------|--------|--------|------|-----------|
-| 2645 | 426 | 119 | YES (t=4) | NO | Worker alive but factory still trapped |
-| 2919 | 436 | 95 | YES (t=2) | NO | Low energy, factory oscillation |
-| 5111 | 440 | 307 | YES (t=8) | NO | Energy rich, wall maze |
-| 7440 | 438 | 33 | YES (t=2) | NO | Very low energy |
-| 8125 | 452 | 38→60 | YES (t=2) | NO | Low energy, late mine income |
-| 10591 | 454 | 52→113 | YES (t=2) | NO | Was a draw, now win (but still counted) |
+## vs v49: 8 Losses
 
-### vs v49 (5 losses + 2 draws)
+- Death causes: {'SCROLL_OUT': 8}
+- Avg factory life: 440 steps
+- Avg gap range: 0.0 ~ 17.9
+- Avg stuck time: 141 steps per game
+- Games with mine: 0/8
+- Avg final energy: 143 (opp: 29)
 
-| Seed | Steps | Energy | Worker | Mine | Key Issue |
-|------|-------|--------|--------|------|-----------|
-| 2234 | 438 | 155→209 | YES (t=4) | NO | Factory oscillation |
-| 4563 | 446 | 122→150 | YES (t=7) | NO | Wall traps |
-| 11139 | 450 | 176→197 | YES (t=7) | NO | Wall traps |
-| 12920 | 458 | 124→174 | YES (t=2) | NO | Late wall traps |
-| 13194 | 448 | 120 | YES (t=10) | NO | Frequent stuck periods |
-| 864* | 446 | 267→290 | YES | NO | *Draw* — both survive to end |
-| 8399* | 442 | 101→101 | YES | NO | *Draw* — both survive to end |
+### Individual Losses
 
-### vs v50 (4 losses)
+**Seed 1138** (SCROLL_OUT, life=451)
+- gap: min=0 max=19 final=0
+- my E: min=111 final=111 | opp E: final=89
+- workers: born@[2, 43, 59] died@[42, 45, 321]
+- **no mines built**
 
-| Seed | Steps | Energy | Worker | Mine | Key Issue |
-|------|-------|--------|--------|------|-----------|
-| 1412 | 446 | 306→408 | YES (t=2) | YES (t=77) | Energy rich, mine collected, still stuck |
-| 6070 | 456 | 86 | YES (t=2) | NO | Low energy, wall traps |
-| 11687 | 458 | 92 | YES (t=7) | NO | No mine, wall traps |
-| 13194 | 448 | 120 | YES (t=10) | NO | Frequent stuck periods |
+**Seed 2234** (SCROLL_OUT, life=439)
+- gap: min=0 max=17 final=0
+- my E: min=156 final=207
+- workers: born@[4, 133, 230] died@[84, 228, 361]
+- **no mines built**
 
-**Note**: Seed 13194 appears in both v49 and v50 losses (same starting position loses to both opponents).
+**Seed 3056** (SCROLL_OUT, life=425)
+- gap: min=0 max=19 final=0
+- my E: min=98 final=120 | opp E: final=82
+- workers: born@[10, 25, 177] died@[24, 149, 229]
+- **no mines built**
 
----
+**Seed 4563** (SCROLL_OUT, life=447)
+- gap: min=0 max=19 final=0
+- my E: min=123 final=148 | opp E: final=59
+- workers: born@[7, 25, 220] died@[24, 216, 222]
+- **no mines built**
 
-## 3. Pattern Classification (All 15 Remaining Losses)
+**Seed 8399** (SCROLL_OUT, life=437)
+- gap: min=0 max=19 final=0
+- my E: min=105 final=105
+- workers: born@[2, 76, 253] died@[75, 252, 267]
+- **no mines built**
 
-### Pattern: Scroll-Out with Factory Oscillation (15/15)
-- All losses: factory dies at step 426-458 when scroll boundary catches up
-- Factory speed: MOVE every 2 turns (0.5 cells/turn) + JUMP every 20 turns (~0.1 cells/turn avg) = ~0.6 cells/turn effective
-- Late-game scroll: 1 cell/step at step 400+
-- **Mechanical ceiling**: 0.6 < 1.0, factory mathematically cannot keep up in late game
-- Most losses show factory oscillating (moving E/W instead of N) during stuck periods
+**Seed 11139** (SCROLL_OUT, life=449)
+- gap: min=0 max=19 final=0
+- my E: min=175 final=197
+- workers: born@[7, 25, 178] died@[24, 177, 293]
+- **no mines built**
 
-### No More Enemy-Collision Losses
-The 2 original enemy-collision losses (seeds 6344, 7988) have been fixed by the threat avoidance system.
+**Seed 12235** (SCROLL_OUT, life=420)
+- gap: min=0 max=12 final=0
+- my E: min=144 final=144
+- workers: born@[7, 162, 304] died@[156, 293, 378]
+- **no mines built**
 
----
+**Seed 13194** (SCROLL_OUT, life=455)
+- gap: min=0 max=19 final=0
+- my E: min=114 final=114
+- workers: born@[9, 77, 89] died@[75, 88, 156]
+- **no mines built**
 
-## 4. Actionable Improvement Directions
 
-### Direction 1: Anti-Oscillation Logic
-- **Problem**: Factory oscillates E/W when BFS alternates between two equal-cost paths
-- **Idea**: Track recently visited cells, penalize revisiting within N turns
-- **Risk**: May prevent legitimate backtracking when genuinely stuck
+## vs v50: 6 Losses
 
-### Direction 2: Worker Wall-Clearing Optimization
-- **Problem**: Worker exists but doesn't always clear the right walls in time
-- **Idea**: Prioritize removing walls directly north of factory's position
-- **Idea**: Worker should follow factory more closely, clearing its path
+- Death causes: {'SCROLL_OUT': 6}
+- Avg factory life: 439 steps
+- Avg gap range: 0.0 ~ 18.7
+- Avg stuck time: 158 steps per game
+- Games with mine: 4/6
+- Avg final energy: 1303 (opp: 0)
 
-### Direction 3: Earlier JUMP Usage
-- **Problem**: Factory only JUMPs when gap≤2 or stuck≥2 — may wait too long
-- **Idea**: Use JUMP proactively when BFS shows limited northward options
-- **Risk**: Wasting JUMP when not needed could leave factory vulnerable later
+### Individual Losses
 
-### Direction 4: Accept Mechanical Ceiling
-- **Reality**: Factory speed < late-game scroll speed is a game mechanic, not a bug
-- With 283/300 (94.3%) and no enemy-collision losses, further improvements are marginal
-- Remaining losses would require fundamental architecture changes (multiple workers, etc.)
+**Seed 1412** (SCROLL_OUT, life=435)
+- gap: min=0 max=19 final=0
+- my E: min=451 final=1735
+- workers: born@[2, 91, 223, 327, 428] died@[84, 222, 321, 427, 433]
+- mines built at: [68, 396]
 
----
+**Seed 2508** (SCROLL_OUT, life=441)
+- gap: min=0 max=17 final=0
+- my E: min=517 final=5435 | opp E: final=0
+- workers: born@[2, 256, 299, 322, 361, 372, 409] died@[170, 298, 300, 357, 368, 423]
+- mines built at: [26, 113, 137]
 
-## 5. Summary
+**Seed 6070** (SCROLL_OUT, life=447)
+- gap: min=0 max=19 final=0
+- my E: min=187 final=187
+- workers: born@[2, 157, 314, 393] died@[156, 313, 387, 409]
+- mines built at: [116]
 
-**The enemy factory threat avoidance fix eliminated all collision-type losses** (+4 net wins, no regressions). The remaining 15 losses are all scroll-out — a mechanical ceiling where the factory's movement speed cannot keep up with late-game scroll acceleration.
+**Seed 6892** (SCROLL_OUT, life=399)
+- gap: min=0 max=19 final=0
+- my E: min=105 final=105
+- workers: born@[4, 92, 231] died@[75, 216, 353]
+- **no mines built**
 
-**Current record**: 283W-15L-2D (94.3%) across 300 games vs three NN opponents.
+**Seed 11687** (SCROLL_OUT, life=457)
+- gap: min=0 max=19 final=0
+- my E: min=242 final=242
+- workers: born@[25, 185, 218, 236, 323] died@[184, 193, 235, 321, 325]
+- mines built at: [135]
 
-**Most promising improvements** (ranked by expected impact):
-1. Anti-oscillation logic (reduce wasted lateral moves)
-2. Worker positioning optimization (clear factory's forward path)
-3. Earlier JUMP triggers (proactive rather than reactive)
-4. Accept mechanical ceiling (diminishing returns on further optimization)
+**Seed 13194** (SCROLL_OUT, life=455)
+- gap: min=0 max=19 final=0
+- my E: min=114 final=114
+- workers: born@[9, 77, 89] died@[75, 88, 156]
+- **no mines built**
+
+## Cross-Opponent Patterns
+
+- Total losses: 19
+- Scroll-out: 19/19
+- Other: 0/19
+
+- Early deaths (<=200): 0
+- Late deaths (>200): 19
+
+- No mine built: 15/19
+
+- Avg stuck time: 152/437 steps (35%)
+
+## Root Cause Analysis
+
+### Primary: Extended Stuck Periods
+
+Almost every loss features long periods (50-200+ steps) where the factory makes no forward progress. The factory's gap peaks at 15-19 around step 150-250, then slowly declines as scroll accelerates. During stuck periods, the factory wanders laterally or oscillates, unable to find a north path.
+
+### Secondary: Worker Instability
+
+Workers are built early (step 2-8) but typically die within 50-100 steps (scrolled out). The factory then has no wall-clearing capability, leading to more stuck periods. Worker rebuild is delayed by the 600+ energy threshold.
+
+### Tertiary: Mine Scarcity in Losses
+
+15/19 losses had no mine. Without mine income, factory energy drains at ~20/step. Mines were previously rejected for hurting win rate, but in loss games they could provide crucial energy.
+
+## Improvement Suggestions
+
+### P0: Reduce Stuck Time (highest impact)
+- **Aggressive JUMP when stuck**: If `factory_stuck >= 5`, accept ANY JUMP landing (including SOUTH-only)
+- **Lateral escape BFS**: When stuck > 10 steps, BFS for any cell with gap > current (not just row+2)
+- **South-backtrack**: Allow SOUTH move when stuck > 20 steps (sometimes going south finds a better corridor)
+
+### P1: Worker Survival
+- Keep workers within gap-3 of factory; if worker gap < factory gap - 3, move worker south
+- Rebuild worker faster after death (lower threshold when worker_count=0 and gap is healthy)
+
+### P2: Scout for Vision
+- Build 1 scout (50 energy) early to reveal walls 5 cells ahead
+- Better wall knowledge → fewer dead ends → less stuck time
+
+### P3: Conditional Mine Investment
+- When factory is already stuck (stuck >= 5) and a mine node is within 3 cells, invest in miner
+- Mine income during stuck periods extends survival, potentially allowing the factory to outlast the opponent

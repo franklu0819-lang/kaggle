@@ -225,14 +225,15 @@ All 19 losses are scroll-out deaths (avg life ~437 steps). Key patterns:
 
 See `loss_analysis.md` for full details.
 
-### agent_v10 (100-game eval, current best)
+### agent_v10 (100-game eval, aggressive scroll: 4→1, 400 ramp)
 
-Key features over v3: (1) 3-tier factory navigation (direct NORTH → pessimistic BFS → unconditional lateral with crystal preference); (2) on_own_mine: stay on own mine when panic_steps>60 (turn<100) or panic_steps>100 (turn 100-200), earning energy from mines when safe; (3) dead-end detection: skip Tier 1/2 when r+1 is complete dead end (no north/east/west exits) and jump_cd>6, forcing lateral movement instead; (4) worker prioritizes wall removal at factory front; (5) smart crush: crush friendly units unless fresh worker and safe.
+Key features over v3: (1) 3-tier factory navigation (direct NORTH → pessimistic BFS → unconditional lateral with crystal preference); (2) JUMP landing quality check: require north exit or ≥2 non-south exits at landing (relaxed in dead ends); (3) dead-end detection + panic JUMP: skip Tier 1/2 when r+1 is dead end; when in dead end, allow JUMP to any landing with exits; lateral JUMP escape from dead ends; (4) worker delay: build worker at turn ≥ 4 (after initial JUMP) so worker spawns near factory; stuck build: allow building 2nd worker when stuck ≥ 3; (5) worker E/W wall breaking: when factory stuck, worker breaks E/W walls at dead-end cell; (6) smart crush: crush friendly units unless fresh worker and safe.
 
 | Opponent | Result |
 |----------|--------|
-| v2 (BFS factory-only) | 81W-12L-7D |
-| v6 (BC+PPO vs fixed) | 75W-21L-4D |
-| v15 (factory-only NN) | 96W-4L-0D |
-| v49 (all-units NN) | 96W-2L-2D |
-| v50 (all-units NN) | 96W-4L-0D |
+| random | 87W-9L-4D (87%) |
+| v2 (BFS factory-only) | 87W-10L-3D (87%) |
+| v6 (BC+PPO vs fixed) | 78W-20L-2D (78%) |
+| v15 (factory-only NN) | 60W-37L-3D (60%) |
+| v49 (all-units NN) | 32W-67L-1D (32%) |
+| v50 (all-units NN) | 24W-70L-6D (24%) |

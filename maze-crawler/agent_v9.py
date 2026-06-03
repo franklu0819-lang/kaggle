@@ -165,9 +165,9 @@ def calc_mine_roi(mine_node, factory_c, factory_r, gap, step, obs, config):
     if dist is None:
         return 0
     turns_to_reach = dist * 2
-    start_int = getattr(config, "scrollStartInterval", 10)
-    end_int = getattr(config, "scrollEndInterval", 2)
-    ramp_steps = getattr(config, "scrollRampSteps", 450)
+    start_int = getattr(config, "scrollStartInterval", 4)
+    end_int = getattr(config, "scrollEndInterval", 1)
+    ramp_steps = getattr(config, "scrollRampSteps", 400)
     progress = min(1.0, step / ramp_steps)
     scroll_interval = max(float(end_int), start_int - (start_int - end_int) * progress)
     gap_at_arrival = gap + row_gain - turns_to_reach / scroll_interval
@@ -278,9 +278,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     my_mines = sum(1 for k, v in getattr(obs, "mines", {}).items() if v[2] == my_player)
 
     # ── Mine target selection ──
-    _start_int = getattr(config, "scrollStartInterval", 10)
-    _end_int = getattr(config, "scrollEndInterval", 2)
-    _ramp_steps = getattr(config, "scrollRampSteps", 450)
+    _start_int = getattr(config, "scrollStartInterval", 4)
+    _end_int = getattr(config, "scrollEndInterval", 1)
+    _ramp_steps = getattr(config, "scrollRampSteps", 400)
     _progress = min(1.0, turn / _ramp_steps)
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
