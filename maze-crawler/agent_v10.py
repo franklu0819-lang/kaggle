@@ -326,7 +326,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             STATE["mine_invested"] = mine_target
 
     # ── JUMP (aggressive: always JUMP when available) ──
-    on_own_mine = panic_steps > 80 and turn < 100 and any(
+    on_own_mine = ((panic_steps > 60 and turn < 100) or (panic_steps > 100 and 100 <= turn < 200)) and any(
         mv[2] == my_player and parse_key(mk) == (c, r)
         for mk, mv in getattr(obs, "mines", {}).items()
     )
@@ -449,21 +449,33 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     crush = not fresh_worker or (stuck >= 1) or (gap <= 3) or must_escape
     panic = (gap <= 3) or must_escape
 
-    # Tier 1: Direct NORTH (MOVE)
-    if move_cd == 0 and can_go(obs, config, c, r, "NORTH"):
-        if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
-                            allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-            return
+    # Dead-end check: skip Tier 1/2 if r+1 is a complete dead end and no jump available
+    north_open = can_go(obs, config, c, r, "NORTH")
+    skip_tier12 = False
+    if north_open and jump_cd > 6:
+        nc_nr = c, r + 1
+        nr_north = can_go(obs, config, c, r + 1, "NORTH")
+        nr_east = can_go(obs, config, c, r + 1, "EAST")
+        nr_west = can_go(obs, config, c, r + 1, "WEST")
+        if not nr_north and not nr_east and not nr_west:
+            skip_tier12 = True
 
-    # Tier 2: Pessimistic BFS to goals (MOVE)
-    if move_cd == 0:
-        step_dir = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=500)
-        if step_dir:
-            dc2, dr2, _ = DIRS[step_dir]
-            if dr2 >= 0:
-                if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
-                                    allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
-                    return
+    if not skip_tier12:
+        # Tier 1: Direct NORTH (MOVE)
+        if move_cd == 0 and north_open:
+            if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
+                                allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                return
+
+        # Tier 2: Pessimistic BFS to goals (MOVE)
+        if move_cd == 0:
+            step_dir = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=500)
+            if step_dir:
+                dc2, dr2, _ = DIRS[step_dir]
+                if dr2 >= 0:
+                    if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
+                                        allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                        return
 
     # Tier 3: Unconditional lateral with crystal preference (MOVE)
     if move_cd == 0:
@@ -472,8 +484,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         for d in ew:
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
-                nc = c + dc2
-                has_crystal = f"{nc},{r+1}" in crystals
+                nc_lat = c + dc2
+                has_crystal = f"{nc_lat},{r+1}" in crystals
                 lat_dirs.append((0 if has_crystal else 1, d))
         lat_dirs.sort()
         for _, d in lat_dirs:
