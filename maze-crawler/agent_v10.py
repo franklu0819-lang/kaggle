@@ -425,7 +425,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     center = width // 4
     ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
 
-    north_goals = [(c2, r + 2) for c2 in range(width) if in_bounds(c2, r + 2, obs, config)]
+    north_goals = [(c2, row) for c2 in range(width) for row in range(r + 2, min(r + 5, obs.northBound + 1)) if in_bounds(c2, row, obs, config)]
     goals = north_goals
 
     # When stuck, add worker's forward positions as high-priority goals
