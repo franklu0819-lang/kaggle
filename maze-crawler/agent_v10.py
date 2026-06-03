@@ -463,15 +463,40 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     crush = not fresh_worker or (stuck >= 1) or (gap <= 3) or must_escape
     panic = (gap <= 3) or must_escape
 
-    # Dead-end check: skip Tier 1/2 if r+1 is a complete dead end and no jump available
+    # Dead-end check: skip Tier 1/2 if going north leads to a dead-end corridor
     north_open = can_go(obs, config, c, r, "NORTH")
     skip_tier12 = False
     if north_open and jump_cd > 6:
-        nr_north = can_go(obs, config, c, r + 1, "NORTH")
-        nr_east = can_go(obs, config, c, r + 1, "EAST")
-        nr_west = can_go(obs, config, c, r + 1, "WEST")
-        if not nr_north and not nr_east and not nr_west:
-            # Override: don't skip if no lateral exits (factory has no choice but to go north)
+        # BFS from (c, r+1) looking for any cell with a NORTH exit within 4 steps
+        has_forward_path = False
+        q = deque([((c, r + 1), 0)])
+        visited_de = {(c, r + 1)}
+        while q:
+            (cx, rx), dist = q.popleft()
+            if dist >= 6:
+                break
+            if can_go(obs, config, cx, rx, "NORTH") and (cx, rx) != (c, r + 1):
+                has_forward_path = True
+                break
+            for d in ("EAST", "WEST", "SOUTH"):
+                if d == "SOUTH" and (cx, rx) == (c, r + 1):
+                    continue  # Don't go back to factory position
+                if can_go(obs, config, cx, rx, d):
+                    dc3, dr3, _ = DIRS[d]
+                    nx = (cx + dc3, rx + dr3)
+                    if nx not in visited_de and in_bounds(nx[0], nx[1], obs, config):
+                        visited_de.add(nx)
+                        q.append((nx, dist + 1))
+            # Also check NORTH for path continuation (but not as a goal for r+1)
+            if can_go(obs, config, cx, rx, "NORTH"):
+                dc3, dr3, _ = DIRS["NORTH"]
+                nx = (cx + dc3, rx + dr3)
+                if nx not in visited_de and in_bounds(nx[0], nx[1], obs, config):
+                    visited_de.add(nx)
+                    q.append((nx, dist + 1))
+                    has_forward_path = True  # North exit found
+                    break
+        if not has_forward_path:
             has_lateral = any(can_go(obs, config, c, r, d) for d in ("EAST", "WEST"))
             if has_lateral:
                 skip_tier12 = True
@@ -488,21 +513,32 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             step_dir = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=500)
             if step_dir:
                 dc2, dr2, _ = DIRS[step_dir]
-                if dr2 >= 0:
+                if dr2 >= 0 or (dr2 < 0 and stuck >= 3 and gap > 4):
                     if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
                                         allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                         return
+            else:
+                # Tier 2.5: Optimistic BFS through fog when pessimistic fails
+                step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=500)
+                if step_dir:
+                    dc2, dr2, _ = DIRS[step_dir]
+                    if dr2 >= 0 or (dr2 < 0 and stuck >= 3 and gap > 4):
+                        if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
+                                            allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
+                            return
 
-    # Tier 3: Unconditional lateral with crystal preference (MOVE)
+    # Tier 3: Unconditional lateral with BFS-guided direction preference (MOVE)
     if move_cd == 0:
-        crystals = getattr(obs, "crystals", {}) or {}
         lat_dirs = []
         for d in ew:
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
                 nc_lat = c + dc2
-                has_crystal = f"{nc_lat},{r+1}" in crystals
-                lat_dirs.append((0 if has_crystal else 1, d))
+                # BFS from lateral neighbor to find northward path
+                lat_goals = [(c2, r + 1) for c2 in range(width) if in_bounds(c2, r + 1, obs, config)]
+                north_step = bfs_first_step((nc_lat, r), lat_goals, obs, config, can_go, max_nodes=100)
+                has_north_path = north_step is not None
+                lat_dirs.append((0 if has_north_path else 1, d))
         lat_dirs.sort()
 
         # Anti-oscillation: detect true 2-position oscillation (last 6 positions = 2 unique)
@@ -531,7 +567,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=1000)
             if step_dir:
                 dc2, dr2, _ = DIRS[step_dir]
-                if dr2 >= 0:
+                if dr2 >= 0 or (dr2 < 0 and gap > 4):
                     if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
                                         allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                         return
@@ -548,7 +584,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
 
     # Tier 4: South escape — backtrack when trapped with no forward options
-    if move_cd == 0 and stuck >= 5 and gap > 4 and uid not in actions:
+    if move_cd == 0 and stuck >= 3 and gap > 3 and uid not in actions:
         if can_go(obs, config, c, r, "SOUTH"):
             if factory_try_move(uid, c, r, "SOUTH", obs, config, actions, reserved, occupied, my_player,
                                 allow_crush=crush, danger=enemy_danger, allow_danger=True, hard_block=enemy_hard_block):
@@ -587,7 +623,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                max_workers = 2 if (turn > 400 or stuck >= 3) else 1
+                max_workers = 1
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
                     if not can_build and turn >= 100 and energy >= 400:
