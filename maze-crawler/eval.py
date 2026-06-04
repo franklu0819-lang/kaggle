@@ -43,24 +43,35 @@ def load_agent(name):
     if name == "random":
         return "random", None, "random"
 
-    # Try agent_v{N}.py first (v1, v2, v3, ...)
-    agent_file = os.path.join(HERE, f"agent_{name}.py")
-    if os.path.exists(agent_file):
-        mod_name = f"agent_{name}"
+    # If name ends with .py, treat as direct file path
+    if name.endswith(".py"):
+        agent_file = name if os.path.isabs(name) else os.path.join(HERE, name)
+        if not os.path.exists(agent_file):
+            print(f"ERROR: file not found: {agent_file}")
+            sys.exit(1)
+        mod_name = os.path.splitext(os.path.basename(agent_file))[0]
+        display = os.path.basename(agent_file)
     else:
-        # Try agent_submit_v{N}.py
-        agent_file = os.path.join(HERE, f"agent_submit_{name}.py")
-        mod_name = f"agent_submit_{name}"
+        # Try agent_v{N}.py first (v1, v2, v3, ...)
+        agent_file = os.path.join(HERE, f"agent_{name}.py")
+        if os.path.exists(agent_file):
+            mod_name = f"agent_{name}"
+            display = name
+        else:
+            # Try agent_submit_v{N}.py
+            agent_file = os.path.join(HERE, f"agent_submit_{name}.py")
+            mod_name = f"agent_submit_{name}"
+            display = name
 
-    if not os.path.exists(agent_file):
-        print(f"ERROR: cannot find agent for '{name}' (tried agent_{name}.py and agent_submit_{name}.py)")
-        sys.exit(1)
+        if not os.path.exists(agent_file):
+            print(f"ERROR: cannot find agent for '{name}' (tried agent_{name}.py and agent_submit_{name}.py)")
+            sys.exit(1)
 
     spec = importlib.util.spec_from_file_location(mod_name, agent_file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     state = getattr(mod, 'STATE', None)
-    return mod.agent, state, name
+    return mod.agent, state, display
 
 
 def run_game(seed, p0_fn, p0_state, p1_fn, p1_state):
@@ -74,9 +85,9 @@ def run_game(seed, p0_fn, p0_state, p1_fn, p1_state):
 
     env = _make("crawl", configuration={
         "randomSeed": seed,
-        "scrollStartInterval": 4,
-        "scrollEndInterval": 1,
-        "scrollRampSteps": 400,
+        "scrollStartInterval": 10,
+        "scrollEndInterval": 2,
+        "scrollRampSteps": 450,
     }, debug=True)
     env.run([p0_fn, p1_fn])
     steps = env.steps
@@ -130,9 +141,10 @@ def main():
     # Parse args
     if len(sys.argv) == 1:
         print("Usage: python eval.py <agent> [opponent]")
-        print("  python eval.py v50          # v1 vs v50")
-        print("  python eval.py v3 v50       # v3 vs v50")
-        print("  python eval.py v1 random    # v1 vs random")
+        print("  python eval.py v50              # v1 vs v50")
+        print("  python eval.py v3 v50           # v3 vs v50")
+        print("  python eval.py v1 random        # v1 vs random")
+        print("  python eval.py agent_submit_v1.py random   # direct file path")
         sys.exit(1)
 
     opp_name = sys.argv[-1]
