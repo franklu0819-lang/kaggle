@@ -68,6 +68,8 @@ All tests use `kaggle_environments` with the "crawl" environment. The agent is a
 
 - **`agent_v3.py`** — Optimized rule-based agent (factory-focused). Key features: (1) no mine_wait IDLE or mine collection IDLE; (2) worker threshold E≥1500+gap≥8; (3) simplified JUMP (no landing quality filter); (4) simplified MOVE (v2-style tiers + enemy danger avoidance for collision prevention); (5) BFS goals always northward (no mine target diversion). This is the active development agent.
 
+- **`agent_v12.py`** — Based on agent_v10 with dynamic panic_steps thresholds. Key features over v10: (1) BFS goals expanded to r+2~r+4 (three rows); (2) mine decisions use `panic_steps = gap × scroll_interval` with progressive `ps_safe` threshold: `(10+turn//10)` for turn≤100, `(24+turn//20)` for turn>100; (3) skip JUMP when on friendly mine with stored energy; (4) segmented roi_threshold (50/100/200/9999) by panic_steps (100/50/25). Best local eval: 448 total wins across 6 opponents.
+
 ### Submission Files
 
 - **`eval_v1.py`** — Evaluation script for agent_v1 vs a specific opponent version. Runs 100 games with fixed seeds, reports W/L/D and per-loss seed details. Usage: `python eval_v1.py <version>` where version maps to `agent_submit_v{N}.py`.
@@ -237,3 +239,18 @@ Key features over v3: (1) 3-tier factory navigation (direct NORTH → pessimisti
 | v15 (factory-only NN) | 60W-37L-3D (60%) |
 | v49 (all-units NN) | 32W-67L-1D (32%) |
 | v50 (all-units NN) | 24W-70L-6D (24%) |
+
+### agent_v12 (100-game eval, Kaggle scroll: 10→2, 450 ramp)
+
+Based on agent_v10 (commit 1ed81e0) with BFS goal expansion (r+2~r+4) and dynamic panic_steps thresholds replacing fixed gap thresholds. Key changes over v10: (1) BFS goals expanded from r+2 single row to r+2~r+4 three rows for longer-range pathfinding; (2) all mine-related decisions use `panic_steps = gap × scroll_interval` instead of fixed `gap` thresholds; (3) `ps_safe` (safe threshold) varies by turn: `(10 + turn//10)` for turn≤100, `(24 + turn//20)` for turn>100 — progressively more conservative; (4) `roi_threshold` segmented by panic_steps: 50/100/200/9999 at thresholds 100/50/25; (5) skip JUMP when on friendly mine with stored energy ≥50 and panic_steps > ps_safe.
+
+| Opponent | Result |
+|----------|--------|
+| random | 100W-0L-0D (100%) |
+| v1 (factory-only) | 58W-37L-5D (58%) |
+| v2 (BFS factory-only) | 64W-28L-8D (64%) |
+| v49 (all-units NN) | 87W-12L-1D (87%) |
+| v50 (all-units NN) | 91W-8L-1D (91%) |
+| v51 (all-units NN) | 48W-41L-11D (48%) |
+
+vs v11 (previous best): +27W vs v1, +16W vs v2, +5W vs v51, +2W vs v49. avg_reward全面提升（vs v49 +937, vs v50 +895, vs v2 +765）。
