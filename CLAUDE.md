@@ -70,7 +70,7 @@ All tests use `kaggle_environments` with the "crawl" environment. The agent is a
 
 - **`agent_v12.py`** — Based on agent_v10 with dynamic panic_steps thresholds. Key features over v10: (1) BFS goals expanded to r+2~r+4 (three rows); (2) mine decisions use `panic_steps = gap × scroll_interval` with progressive `ps_safe` threshold: `(10+turn//10)` for turn≤100, `(24+turn//20)` for turn>100; (3) skip JUMP when on friendly mine with stored energy; (4) segmented roi_threshold (50/100/200/9999) by panic_steps (100/50/25). Best local eval: 448 total wins across 6 opponents.
 
-- **`agent_v13.py`** — Based on agent_v12 with BFS-aware worker wall removal. Key changes: (1) removed dead code (duplicate factory-north-cell wall check); (2) worker wall removal prioritizes factory's BFS direction — when factory's north is blocked, worker removes walls in the BFS-computed lateral direction first. Eval: 537W vs v12's 539W (-2W noise), reward slightly improved.
+- **`agent_v13.py`** — Based on agent_v12 with late-game survival optimizations. Key changes: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100); (4) more workers: up to 3 after turn 300, build even when factory stuck (stuck≥3); (5) Tier 3 lateral movement prefers directions with north exits. Eval vs v12: +28W across 6 opponents (v51 +11W, v2 +7W, v49 +7W, v50 +3W).
 
 ### Submission Files
 
@@ -259,16 +259,15 @@ vs v11 (previous best): +27W vs v1, +16W vs v2, +5W vs v51, +2W vs v49. avg_rewa
 
 ### agent_v13 (100-game eval, Kaggle scroll: 10→2, 450 ramp)
 
-Based on agent_v12 with BFS-aware worker wall removal. Key changes over v12: (1) removed dead code (duplicate factory-north-cell wall check that was unreachable); (2) worker wall removal uses BFS to determine factory's desired direction when north is blocked — prioritizes removing walls in the factory's lateral escape direction over arbitrary order.
+Based on agent_v12 with late-game survival optimizations. Key changes over v12: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100, was 100); (4) more workers: max 3 after turn 300 (was 2 after turn 400), build even when factory stuck (stuck≥3, energy≥300); (5) Tier 3 lateral movement prefers directions with north exits over crystal preference.
 
 | Opponent | Result |
 |----------|--------|
 | random | 100W-0L-0D (100%) |
-| v1 (factory-only) | 57W-38L-5D (57%) |
-| v2 (BFS factory-only) | 63W-29L-8D (63%) |
-| v15 (factory-only NN) | 91W-8L-1D (91%) |
-| v49 (all-units NN) | 87W-12L-1D (87%) |
-| v50 (all-units NN) | 91W-8L-1D (91%) |
-| v51 (all-units NN) | 48W-41L-11D (48%) |
+| v1 (factory-only) | 58W-37L-5D (58%) |
+| v2 (BFS factory-only) | 71W-28L-1D (71%) |
+| v49 (all-units NN) | 94W-5L-1D (94%) |
+| v50 (all-units NN) | 94W-6L-0D (94%) |
+| v51 (all-units NN) | 59W-35L-6D (59%) |
 
-vs v12: -2W total (537W vs 539W, within noise). Reward slightly improved (+2.6 avg). BFS-aware wall removal is neutral on win rate with minor reward gain.
+vs v12: +28W total (476W vs 448W). Key improvements: v51 +11W, v2 +7W, v49 +7W, v50 +3W. Reward improved vs strong opponents (v51 +63.6), regressed vs weaker opponents due to energy spent on workers.
