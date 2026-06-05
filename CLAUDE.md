@@ -70,6 +70,8 @@ All tests use `kaggle_environments` with the "crawl" environment. The agent is a
 
 - **`agent_v12.py`** — Based on agent_v10 with dynamic panic_steps thresholds. Key features over v10: (1) BFS goals expanded to r+2~r+4 (three rows); (2) mine decisions use `panic_steps = gap × scroll_interval` with progressive `ps_safe` threshold: `(10+turn//10)` for turn≤100, `(24+turn//20)` for turn>100; (3) skip JUMP when on friendly mine with stored energy; (4) segmented roi_threshold (50/100/200/9999) by panic_steps (100/50/25). Best local eval: 448 total wins across 6 opponents.
 
+- **`agent_v13.py`** — Based on agent_v12 with optimized worker/scout build logic. Key changes: (1) worker build threshold unified to E≥700 with 2nd worker at turn>300; (2) scout built when turn<200, energy≥150, limited to 1 — positioned at fr+4 ahead of factory for extended vision (scout vision=5 + factory vision=4); (3) scout uses 3-tier navigation mirroring factory (direct NORTH → BFS → lateral). This is the active development agent.
+
 ### Submission Files
 
 - **`eval_v1.py`** — Evaluation script for agent_v1 vs a specific opponent version. Runs 100 games with fixed seeds, reports W/L/D and per-loss seed details. Usage: `python eval_v1.py <version>` where version maps to `agent_submit_v{N}.py`.
@@ -254,3 +256,19 @@ Based on agent_v10 (commit 1ed81e0) with BFS goal expansion (r+2~r+4) and dynami
 | v51 (all-units NN) | 48W-41L-11D (48%) |
 
 vs v11 (previous best): +27W vs v1, +16W vs v2, +5W vs v51, +2W vs v49. avg_reward全面提升（vs v49 +937, vs v50 +895, vs v2 +765）。
+
+### agent_v13 (100-game eval, Kaggle scroll: 10→2, 450 ramp)
+
+Based on agent_v12 with worker build threshold optimization and scout integration. Key changes over v12: (1) worker build threshold raised to E≥700 (was complex multi-tier); (2) 2nd worker allowed when turn>300 (was turn>400); (3) scout built when turn<200 and energy≥150, positioned at fr+4 ahead of factory with 3-tier navigation (direct NORTH → BFS → lateral); scout limited to 1 per game, priority over worker in build queue; (4) scout movement: stays at fr+4 from factory, waits when >5 rows ahead, holds position at target.
+
+| Opponent | Result |
+|----------|--------|
+| random | 100W-0L-0D (100%) |
+| v1 (factory-only) | 56W-38L-6D (56%) |
+| v2 (BFS factory-only) | 58W-31L-11D (58%) |
+| v15 (factory-only NN) | 93W-6L-1D (93%) |
+| v49 (all-units NN) | 91W-6L-3D (91%) |
+| v50 (all-units NN) | 91W-7L-2D (91%) |
+| v51 (all-units NN) | 53W-38L-9D (53%) |
+
+vs v12: +2W vs v15, +4W vs v49, +5W vs v51, -2W vs v1, -6W vs v2. Net +3W across all opponents. Reward全面提升（v15 +539, v49 +350, v50 +415, v51 -48）。
