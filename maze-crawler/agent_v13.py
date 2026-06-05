@@ -16,7 +16,6 @@ STATE = {
     "mine_wait": False,       # True after BUILD_MINER, wait for mine to appear
     "mine_wait_since": 0,    # turn when we started waiting
     "last_build_turn": -999,  # track when we last built a unit
-    "bfs_stuck": False,
 }
 
 TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER = 0, 1, 2, 3
@@ -94,10 +93,6 @@ def update_state(obs, config, my_player):
                     STATE["factory_stuck"] = 0
             STATE["last_factory_pos"] = pos
             break
-    # Remove nodes and wall cache that have scrolled out of map
-    sb = obs.southBound
-    STATE["nodes"] = {n for n in STATE["nodes"] if n[1] >= sb}
-    STATE["walls"] = {k: v for k, v in STATE["walls"].items() if k[1] >= sb}
 
 
 def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=500):
@@ -452,8 +447,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         if in_bounds(wc, rr, obs, config):
                             goals.insert(0, (wc, rr))
     if mine_target:
-        mc, mr = mine_target
-        approach = (mc, mr - 1)
+        approach = (mine_target[0], mine_target[1] - 1)
         if approach[1] >= r and in_bounds(approach[0], approach[1], obs, config):
             goals = [approach] + goals
         else:
@@ -540,22 +534,16 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                # Scout: priority over worker when turn < 100
-                scout_count = sum(1 for d2 in obs.robots.values()
-                                  if d2[4] == my_player and d2[0] == TYPE_SCOUT)
-                if turn < 200 and scout_count < 1 and energy >= 150:
-                    actions[uid] = "BUILD_SCOUT"
-                    STATE["last_build_turn"] = turn
-                    reserved.add(spawn)
-                    return
-
-                max_workers = 2 if turn > 300 else 1
-                build_threshold = 700
-                if worker_count < max_workers and energy >= build_threshold:
-                    actions[uid] = "BUILD_WORKER"
-                    STATE["last_build_turn"] = turn
-                    reserved.add(spawn)
-                    return
+                max_workers = 2 if turn > 400 else 1
+                if worker_count < max_workers:
+                    can_build = (energy >= 500 and (turn < 150 or energy >= 700))
+                    if not can_build and turn >= 100 and energy >= 400:
+                        can_build = True
+                    if can_build:
+                        actions[uid] = "BUILD_WORKER"
+                        STATE["last_build_turn"] = turn
+                        reserved.add(spawn)
+                        return
 
     actions[uid] = "IDLE"
     reserved.add((c, r))
@@ -570,12 +558,13 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
     wall_cost = getattr(config, "wallRemoveCost", 100)
 
     factory_pos = None
+    factory_uid = None
     for uid2, d2 in obs.robots.items():
         if d2[4] == my_player and d2[0] == TYPE_FACTORY:
             factory_pos = (d2[1], d2[2])
+            factory_uid = uid2
             break
 
-    # Emergency: transfer energy when about to scroll out
     if gap <= 1 and factory_pos and energy > 5:
         fc, fr = factory_pos
         for d, (dc, dr, _) in [("NORTH", DIRS["NORTH"]), ("SOUTH", DIRS["SOUTH"]),
@@ -585,13 +574,14 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
 
-    # At factory's r+1: break north wall, then move aside
     if factory_pos and (c, r) == (factory_pos[0], factory_pos[1] + 1):
+        # Remove north wall first if blocking factory path
         w = wb(obs, config, c, r)
         if w is not None and (w & BIT_N) and energy >= wall_cost + 20:
             actions[uid] = "REMOVE_NORTH"
             reserved.add((c, r))
             return
+        # Then try to move
         laterals = []
         for d in ("EAST", "WEST"):
             if can_go(obs, config, c, r, d):
@@ -604,7 +594,6 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return
 
-    # Break walls near factory path
     if factory_pos and energy >= wall_cost + 20:
         fc, fr = factory_pos
         if abs(c - fc) <= 2 and 0 < (r - fr) <= 4:
@@ -614,14 +603,23 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
         if abs(c - fc) + abs(r - fr) <= 2:
-            for d, bit in [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]:
+            # Determine factory's desired direction to prioritize wall removal
+            wall_dirs = [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]
+            if not can_go(obs, config, fc, fr, "NORTH"):
+                north_goals = [(c2, row) for c2 in range(config.width)
+                               for row in range(fr + 2, min(fr + 5, obs.northBound + 1))
+                               if in_bounds(c2, row, obs, config)]
+                bfs_dir = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
+                if bfs_dir and bfs_dir in ("EAST", "WEST"):
+                    bit = {"EAST": BIT_E, "WEST": BIT_W}[bfs_dir]
+                    wall_dirs = [(bfs_dir, bit)] + [d for d in wall_dirs if d[0] != bfs_dir]
+            for d, bit in wall_dirs:
                 w = wb(obs, config, c, r)
                 if w is not None and (w & bit):
                     actions[uid] = f"REMOVE_{d}"
                     reserved.add((c, r))
                     return
 
-    # Stuck factory: move to factory's r+1 to help
     if factory_pos and STATE.get("factory_stuck", 0) >= 2 and energy >= wall_cost + 20:
         fc, fr = factory_pos
         north_cell = (fc, fr + 1)
@@ -677,18 +675,6 @@ def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
         return
 
     mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
-
-    # Prioritize factory's invested mine target
-    invested = STATE.get("mine_invested")
-    if invested is not None:
-        for mk, mv in getattr(obs, "mines", {}).items():
-            mc2, mr2 = parse_key(mk)
-            if (mc2, mr2) == invested and mv[2] == my_player:
-                step = bfs_first_step((c, r), [invested], obs, config, can_go)
-                if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
-                    return
-                break
-
     vis_list = [n for n in visible_nodes if n not in mines]
     rem_list = [n for n in STATE["nodes"] if n not in mines and in_bounds(n[0], n[1], obs, config)]
     all_nodes = vis_list + rem_list
@@ -710,6 +696,27 @@ def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
 
 def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player):
     c, r, energy = data[1], data[2], data[3]
+    move_cd = data[5] if len(data) > 5 else 0
+    gap = r - obs.southBound
+
+    if move_cd != 0:
+        actions[uid] = "IDLE"
+        reserved.add((c, r))
+        return
+
+    crystals = [(parse_key(k), v) for k, v in (getattr(obs, "crystals", {}) or {}).items()]
+    if crystals:
+        best = max(
+            [(v / max(1, abs(cell[0] - c) + abs(cell[1] - r)), cell)
+             for cell, v in crystals if cell != (c, r)],
+            key=lambda x: x[0],
+            default=None,
+        )
+        if best:
+            _, target = best
+            step = bfs_first_step((c, r), [target], obs, config, can_go)
+            if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
+                return
 
     factory_pos = None
     for uid2, d2 in obs.robots.items():
@@ -717,59 +724,20 @@ def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player)
             factory_pos = (d2[1], d2[2])
             break
 
-    if factory_pos is None:
-        if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
-            return
-        actions[uid] = "IDLE"
-        reserved.add((c, r))
-        return
-
-    fc, fr = factory_pos
-    width = config.width
-    # Scout vision=5, factory vision=4. Stay fr+4 ahead for seamless coverage
-    target_row = min(fr + 4, obs.northBound)
-    ahead = r - fr
-
-    # Too far ahead: wait for factory
-    if ahead > 5:
-        # Fell too far ahead, wait — move laterally toward factory column
-        center = width // 2
-        ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
-        for d in ew:
-            if can_go(obs, config, c, r, d):
-                if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
-                    return
-        actions[uid] = "IDLE"
-        reserved.add((c, r))
-        return
-
-    if r >= target_row:
-        # Already at target: hold position or move laterally
-        actions[uid] = "IDLE"
-        reserved.add((c, r))
-        return
-
-    # Tier 1: Direct NORTH
-    if can_go(obs, config, c, r, "NORTH"):
-        if try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player):
+    if factory_pos:
+        fc, fr = factory_pos
+        target_row = min(obs.northBound, fr + 6)
+        half = config.width // 2
+        if c < half:
+            target_col = min(half - 1, c + 3)
+        else:
+            target_col = max(half, c - 3)
+        step = bfs_first_step((c, r), [(target_col, target_row)], obs, config, can_go)
+        if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
             return
 
-    # Tier 2: BFS to target_row, preferring factory column
-    goals = [(fc, row) for row in range(r + 1, target_row + 1) if in_bounds(fc, row, obs, config)]
-    goals += [(c2, row) for c2 in range(width) for row in range(r + 1, target_row + 1)
-              if in_bounds(c2, row, obs, config) and c2 != fc]
-    if goals:
-        step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=300)
-        if step_dir and try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player):
-            return
-
-    # Tier 3: Lateral
-    center = width // 2
-    ew = ["EAST", "WEST"] if c <= center else ["WEST", "EAST"]
-    for d in ew:
-        if can_go(obs, config, c, r, d):
-            if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
-                return
+    if move_north(uid, c, r, obs, config, actions, reserved, occupied, my_player):
+        return
 
     actions[uid] = "IDLE"
     reserved.add((c, r))
