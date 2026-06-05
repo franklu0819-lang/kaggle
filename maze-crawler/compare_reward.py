@@ -34,12 +34,14 @@ def load_agent(name):
     state = getattr(mod, 'STATE', None)
     return mod.agent, state, os.path.basename(agent_file)
 
-def run_games(p0_fn, p0_state, p1_fn, p1_state, label=""):
+def run_games(p0_fn, p0_state, p1_fn, p1_state, label="", num_games=None):
+    ng = num_games if num_games is not None else NUM_GAMES
     total_reward = 0
+    total_steps = 0
     wins = 0
     losses = 0
     draws = 0
-    for i in range(NUM_GAMES):
+    for i in range(ng):
         if p0_state is not None:
             p0_state.clear()
             p0_state.update(get_state_reset())
@@ -59,6 +61,7 @@ def run_games(p0_fn, p0_state, p1_fn, p1_state, label=""):
         r0 = final[0].reward
         r1 = final[1].reward
         total_reward += r0
+        total_steps += len(steps)
         if r0 > r1:
             wins += 1
         elif r0 < r1:
@@ -66,28 +69,39 @@ def run_games(p0_fn, p0_state, p1_fn, p1_state, label=""):
         else:
             draws += 1
 
-    avg_reward = total_reward / NUM_GAMES
-    print(f"  {label:20s} | {wins}W-{losses}L-{draws}D | avg_reward={avg_reward:>8.1f}")
-    return avg_reward
+    avg_reward = total_reward / ng
+    avg_steps = total_steps / ng
+    print(f"  {label:20s} | {wins}W-{losses}L-{draws}D | avg_reward={avg_reward:>8.1f} | avg_steps={avg_steps:>6.1f}")
+    return avg_reward, avg_steps
 
 if __name__ == "__main__":
-    agents_to_test = ["agent_v11.py", "agent_v12.py"]
-    opponents = ["random", "v1", "v2", "v49", "v50", "v51"]
+    import argparse
+    parser = argparse.ArgumentParser(description="Compare agent rewards")
+    parser.add_argument("agents", nargs="+", help="Agent files to compare (e.g. v12 v13)")
+    parser.add_argument("--opponents", nargs="+", default=["random", "v1", "v2", "v49", "v50", "v51"],
+                        help="Opponents to test against")
+    parser.add_argument("--games", type=int, default=100, help="Number of games per matchup (default 100)")
+    args = parser.parse_args()
+    agents_to_test = [a if a.endswith(".py") else f"agent_{a}.py" for a in args.agents]
+    opponents = args.opponents
 
     print(f"{'Opponent':20s} | ", end="")
     for a in agents_to_test:
         print(f"{a:20s} | ", end="")
     print("diff")
-    print("-" * 90)
+    print("-" * 120)
 
     for opp in opponents:
         p1_fn, p1_state, opp_label = load_agent(opp)
         results = []
         for agent_file in agents_to_test:
             p0_fn, p0_state, agent_label = load_agent(agent_file)
-            avg_r = run_games(p0_fn, p0_state, p1_fn, p1_state, label=f"{agent_file} vs {opp_label}")
-            results.append(avg_r)
-        diff = results[1] - results[0]
-        sign = "+" if diff >= 0 else ""
-        print(f"  {'':20s}   diff = {sign}{diff:.1f}")
+            avg_r, avg_s = run_games(p0_fn, p0_state, p1_fn, p1_state, label=f"{agent_file} vs {opp_label}", num_games=args.games)
+            results.append((avg_r, avg_s))
+        if len(results) == 2:
+            diff_r = results[1][0] - results[0][0]
+            diff_s = results[1][1] - results[0][1]
+            sign_r = "+" if diff_r >= 0 else ""
+            sign_s = "+" if diff_s >= 0 else ""
+            print(f"  {'':20s}   diff = {sign_r}{diff_r:.1f} reward | {sign_s}{diff_s:.1f} steps")
         print()
