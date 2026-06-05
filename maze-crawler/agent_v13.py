@@ -290,9 +290,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
     ps_safe = (10 + turn // 10) if turn <= 100 else (24 + turn // 20)
-    if panic_steps >= 100:
-        roi_threshold = 50
-    elif panic_steps >= 50:
+    if panic_steps >= 50:
         roi_threshold = 50
     elif panic_steps >= 25:
         roi_threshold = 100
