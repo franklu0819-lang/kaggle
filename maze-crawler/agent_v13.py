@@ -324,6 +324,33 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             mine_target = candidates[0][1]
             STATE["mine_invested"] = mine_target
 
+    # ── Urgent mine: adjacent mining node → build miner immediately or wait for cooldown ──
+    spawn_ok_um = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
+    urgent_mine = None
+    if spawn_ok_um and energy >= 400 and panic_steps > ps_safe:
+        vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
+        ex_mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
+        has_miner = any(d2[4] == my_player and d2[0] == TYPE_MINER for d2 in obs.robots.values())
+        if not has_miner:
+            for nc, nr in [(c, r+1), (c-1, r+1), (c+1, r+1)]:
+                if (nc, nr) in vis_nodes and (nc, nr) not in ex_mines and in_bounds(nc, nr, obs, config):
+                    if nc == c or can_go(obs, config, c, r+1, "EAST" if nc > c else "WEST"):
+                        urgent_mine = (nc, nr)
+                        break
+    if urgent_mine:
+        if build_cd == 0 and move_cd != 0 and not friendly_at(occupied, (c, r + 1), my_player):
+            actions[uid] = "BUILD_MINER"
+            STATE["mine_wait"] = True
+            STATE["last_build_turn"] = turn
+            STATE["mine_wait_since"] = turn
+            STATE["mine_invested"] = urgent_mine
+            reserved.add((c, r + 1))
+            return
+        elif build_cd == 1 and move_cd == 0:
+            actions[uid] = "IDLE"
+            reserved.add((c, r))
+            return
+
     # ── Check if on a friendly mine with stored energy (skip JUMP to collect) ──
     on_friendly_mine = False
     mine_stored_energy = 0
