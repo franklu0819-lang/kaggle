@@ -290,10 +290,12 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
     ps_safe = (10 + turn // 10) if turn <= 100 else (24 + turn // 20)
-    if panic_steps >= 50:
+    if panic_steps >= 100:
         roi_threshold = 50
-    elif panic_steps >= 25:
+    elif panic_steps >= 50:
         roi_threshold = 100
+    elif panic_steps >= 25:
+        roi_threshold = 200
     else:
         roi_threshold = 9999
 
@@ -323,33 +325,6 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             candidates.sort()
             mine_target = candidates[0][1]
             STATE["mine_invested"] = mine_target
-
-    # ── Urgent mine: adjacent mining node → build miner immediately or wait for cooldown ──
-    spawn_ok_um = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
-    urgent_mine = None
-    if spawn_ok_um and energy >= 400 and panic_steps > ps_safe:
-        vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
-        ex_mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
-        has_miner = any(d2[4] == my_player and d2[0] == TYPE_MINER for d2 in obs.robots.values())
-        if not has_miner:
-            for nc, nr in [(c, r+1), (c-1, r+1), (c+1, r+1)]:
-                if (nc, nr) in vis_nodes and (nc, nr) not in ex_mines and in_bounds(nc, nr, obs, config):
-                    if nc == c or can_go(obs, config, c, r+1, "EAST" if nc > c else "WEST"):
-                        urgent_mine = (nc, nr)
-                        break
-    if urgent_mine:
-        if build_cd == 0 and move_cd != 0 and not friendly_at(occupied, (c, r + 1), my_player):
-            actions[uid] = "BUILD_MINER"
-            STATE["mine_wait"] = True
-            STATE["last_build_turn"] = turn
-            STATE["mine_wait_since"] = turn
-            STATE["mine_invested"] = urgent_mine
-            reserved.add((c, r + 1))
-            return
-        elif build_cd == 1 and move_cd == 0:
-            actions[uid] = "IDLE"
-            reserved.add((c, r))
-            return
 
     # ── Check if on a friendly mine with stored energy (skip JUMP to collect) ──
     on_friendly_mine = False
@@ -511,7 +486,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                                         allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                         return
 
-    # Tier 3: Unconditional lateral with north-exit and crystal preference (MOVE)
+    # Tier 3: Unconditional lateral with crystal preference (MOVE)
     if move_cd == 0:
         crystals = getattr(obs, "crystals", {}) or {}
         lat_dirs = []
@@ -519,18 +494,16 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
                 nc_lat = c + dc2
-                has_north = can_go(obs, config, nc_lat, r, "NORTH")
                 has_crystal = f"{nc_lat},{r+1}" in crystals
-                lat_dirs.append((0 if has_north else 1, 0 if has_crystal else 1, d))
+                lat_dirs.append((0 if has_crystal else 1, d))
         lat_dirs.sort()
-        for _, _, d in lat_dirs:
+        for _, d in lat_dirs:
             if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
                                 allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                 return
 
     # ── BUILD (during move cooldown) ──
-    can_build_stuck = stuck >= 3 and worker_count < 3 and energy >= 300
-    if move_cd != 0 and build_cd == 0 and (panic_steps >= ps_safe or can_build_stuck):
+    if move_cd != 0 and build_cd == 0 and panic_steps >= ps_safe:
         spawn_ok = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
         if spawn_ok:
             spawn = (c, r + 1)
@@ -561,7 +534,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                max_workers = 3 if turn > 300 else (2 if turn > 200 else 1)
+                max_workers = 2 if turn > 400 else 1
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
                     if not can_build and turn >= 100 and energy >= 400:
@@ -623,6 +596,12 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
 
     if factory_pos and energy >= wall_cost + 20:
         fc, fr = factory_pos
+        if c == fc and r == fr + 1:
+            w = wb(obs, config, c, r)
+            if w is not None and (w & BIT_N):
+                actions[uid] = "REMOVE_NORTH"
+                reserved.add((c, r))
+                return
         if abs(c - fc) <= 2 and 0 < (r - fr) <= 4:
             w = wb(obs, config, c, r)
             if w is not None and (w & BIT_N):
@@ -630,17 +609,7 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
         if abs(c - fc) + abs(r - fr) <= 2:
-            # Determine factory's desired direction to prioritize wall removal
-            wall_dirs = [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]
-            if not can_go(obs, config, fc, fr, "NORTH"):
-                north_goals = [(c2, row) for c2 in range(config.width)
-                               for row in range(fr + 2, min(fr + 5, obs.northBound + 1))
-                               if in_bounds(c2, row, obs, config)]
-                bfs_dir = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
-                if bfs_dir and bfs_dir in ("EAST", "WEST"):
-                    bit = {"EAST": BIT_E, "WEST": BIT_W}[bfs_dir]
-                    wall_dirs = [(bfs_dir, bit)] + [d for d in wall_dirs if d[0] != bfs_dir]
-            for d, bit in wall_dirs:
+            for d, bit in [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]:
                 w = wb(obs, config, c, r)
                 if w is not None and (w & bit):
                     actions[uid] = f"REMOVE_{d}"
@@ -660,33 +629,6 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
         reserved.add((c, r))
         return
 
-    # Worker transfer: both factory and worker physically trapped in dead-end
-    if energy < 80 and factory_pos:
-        fc, fr = factory_pos
-        factory_north_wall = not can_go(obs, config, fc, fr, "NORTH")
-        if factory_north_wall:
-            # Worker south of factory: followed into dead-end
-            if (c, r) == (fc, fr - 1) and can_go(obs, config, c, r, "NORTH"):
-                actions[uid] = "TRANSFER_NORTH"
-                reserved.add((c, r))
-                return
-            # Worker north of factory: ahead but also blocked
-            if (c, r) == (fc, fr + 1) and not can_go(obs, config, c, r, "NORTH"):
-                actions[uid] = "TRANSFER_SOUTH"
-                reserved.add((c, r))
-                return
-            # Worker east of factory: lateral trap
-            if (c, r) == (fc + 1, fr) and not can_go(obs, config, c, r, "EAST"):
-                actions[uid] = "TRANSFER_WEST"
-                reserved.add((c, r))
-                return
-            # Worker west of factory: lateral trap
-            if (c, r) == (fc - 1, fr) and not can_go(obs, config, c, r, "WEST"):
-                actions[uid] = "TRANSFER_EAST"
-                reserved.add((c, r))
-                return
-
-    # Low energy guard: no walls to break → IDLE
     if energy < 30 and factory_pos:
         fc, fr = factory_pos
         nearby_walls = False
