@@ -660,6 +660,33 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
         reserved.add((c, r))
         return
 
+    # Worker transfer: both factory and worker physically trapped in dead-end
+    if energy < 80 and factory_pos:
+        fc, fr = factory_pos
+        factory_north_wall = not can_go(obs, config, fc, fr, "NORTH")
+        if factory_north_wall:
+            # Worker south of factory: followed into dead-end
+            if (c, r) == (fc, fr - 1) and can_go(obs, config, c, r, "NORTH"):
+                actions[uid] = "TRANSFER_NORTH"
+                reserved.add((c, r))
+                return
+            # Worker north of factory: ahead but also blocked
+            if (c, r) == (fc, fr + 1) and not can_go(obs, config, c, r, "NORTH"):
+                actions[uid] = "TRANSFER_SOUTH"
+                reserved.add((c, r))
+                return
+            # Worker east of factory: lateral trap
+            if (c, r) == (fc + 1, fr) and not can_go(obs, config, c, r, "EAST"):
+                actions[uid] = "TRANSFER_WEST"
+                reserved.add((c, r))
+                return
+            # Worker west of factory: lateral trap
+            if (c, r) == (fc - 1, fr) and not can_go(obs, config, c, r, "WEST"):
+                actions[uid] = "TRANSFER_EAST"
+                reserved.add((c, r))
+                return
+
+    # Low energy guard: no walls to break → IDLE
     if energy < 30 and factory_pos:
         fc, fr = factory_pos
         nearby_walls = False

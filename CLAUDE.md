@@ -70,7 +70,7 @@ All tests use `kaggle_environments` with the "crawl" environment. The agent is a
 
 - **`agent_v12.py`** — Based on agent_v10 with dynamic panic_steps thresholds. Key features over v10: (1) BFS goals expanded to r+2~r+4 (three rows); (2) mine decisions use `panic_steps = gap × scroll_interval` with progressive `ps_safe` threshold: `(10+turn//10)` for turn≤100, `(24+turn//20)` for turn>100; (3) skip JUMP when on friendly mine with stored energy; (4) segmented roi_threshold (50/100/200/9999) by panic_steps (100/50/25). Best local eval: 448 total wins across 6 opponents.
 
-- **`agent_v13.py`** — Based on agent_v12 with late-game survival optimizations. Key changes: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100); (4) more workers: up to 3 after turn 300, build even when factory stuck (stuck≥3); (5) Tier 3 lateral movement prefers directions with north exits. Eval vs v12: +28W across 6 opponents (v51 +11W, v2 +7W, v49 +7W, v50 +3W).
+- **`agent_v13.py`** — Based on agent_v12 with late-game survival optimizations. Key changes: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100); (4) more workers: up to 3 after turn 300, build even when factory stuck (stuck≥3); (5) Tier 3 lateral movement prefers directions with north exits; (6) urgent mine: build miner when adjacent mining node found (no existing miner, energy≥400, panic_steps>ps_safe); (7) worker transfer: when factory north is wall and worker has energy<80, transfer energy from trapped worker to factory. Eval vs v12: +28W across 6 opponents. Transfer (e<80) adds +10W total vs no-transfer (475W vs 465W across 6 opponents).
 
 ### Submission Files
 
@@ -259,15 +259,15 @@ vs v11 (previous best): +27W vs v1, +16W vs v2, +5W vs v51, +2W vs v49. avg_rewa
 
 ### agent_v13 (100-game eval, Kaggle scroll: 10→2, 450 ramp)
 
-Based on agent_v12 with late-game survival optimizations. Key changes over v12: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100, was 100); (4) more workers: max 3 after turn 300 (was 2 after turn 400), build even when factory stuck (stuck≥3, energy≥300); (5) Tier 3 lateral movement prefers directions with north exits over crystal preference.
+Based on agent_v12 with late-game survival optimizations. Key changes over v12: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100, was 100); (4) more workers: max 3 after turn 300 (was 2 after turn 400), build even when factory stuck (stuck≥3, energy≥300); (5) Tier 3 lateral movement prefers directions with north exits over crystal preference; (6) urgent mine: build miner when adjacent mining node found (no existing miner, energy≥400, panic_steps>ps_safe); (7) worker transfer: when factory north is wall and worker has energy<80, transfer energy from trapped worker to factory.
 
-| Opponent | Result |
-|----------|--------|
-| random | 100W-0L-0D (100%) |
-| v1 (factory-only) | 58W-37L-5D (58%) |
-| v2 (BFS factory-only) | 71W-28L-1D (71%) |
-| v49 (all-units NN) | 94W-5L-1D (94%) |
-| v50 (all-units NN) | 94W-6L-0D (94%) |
-| v51 (all-units NN) | 59W-35L-6D (59%) |
+| Opponent | eec93ff (no transfer/urgent) | 7a00207 (+urgent mine) | current (+urgent +transfer e<80) |
+|----------|------------------------------|------------------------|----------------------------------|
+| v1 | 58W-37L-5D, r=621 | 60W-37L-3D, r=851 | 61W-34L-5D, r=927 |
+| v2 | 71W-28L-1D, r=727 | 69W-29L-2D, r=930 | 71W-27L-2D, r=974 |
+| v15 | — | — | 95W-4L-1D, r=1993 |
+| v49 | 94W-5L-1D, r=1785 | 95W-4L-1D, r=2015 | 95W-4L-1D, r=2007 |
+| v50 | 94W-6L-0D, r=1723 | 94W-6L-0D, r=1993 | 95W-5L-0D, r=2034 |
+| v51 | 59W-35L-6D, r=653 | 53W-41L-6D, r=719 | 57W-37L-6D, r=858 |
 
-vs v12: +28W total (476W vs 448W). Key improvements: v51 +11W, v2 +7W, v49 +7W, v50 +3W. Reward improved vs strong opponents (v51 +63.6), regressed vs weaker opponents due to energy spent on workers.
+Transfer threshold sweep (total wins across 6 opponents): no-transfer 465W, e<60 473W, e<70 472W, **e<80 475W**, e<90 466W.
