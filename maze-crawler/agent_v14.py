@@ -625,14 +625,16 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
             reserved.add((c, r))
             return
         # Then try to move
+        crystals = getattr(obs, "crystals", {}) or {}
         laterals = []
         for d in ("EAST", "WEST"):
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
                 has_north = can_go(obs, config, c + dc2, r + dr2, "NORTH")
-                laterals.append((0 if has_north else 1, d))
+                has_crystal = f"{c + dc2},{r + dr2 + 1}" in crystals
+                laterals.append((0 if has_north else 1, 0 if has_crystal else 1, d))
         laterals.sort()
-        for d in ["NORTH"] + [d for _, d in laterals]:
+        for d in ["NORTH"] + [d for _, _, d in laterals]:
             if can_go(obs, config, c, r, d):
                 if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return

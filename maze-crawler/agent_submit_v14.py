@@ -381,10 +381,13 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         danger_escape = bool(move_targets) and all(t in enemy_danger for t in move_targets)
 
         allow_danger_jump = (gap <= 3)
+        panic = (gap <= 3) or danger_escape
         lr = r + 2
+        landing_friendly = friendly_at(occupied, (c, lr), my_player)
         if (in_bounds(c, lr, obs, config)
                 and (c, lr) not in enemy_hard_block
-                and ((c, lr) not in enemy_danger or allow_danger_jump)):
+                and ((c, lr) not in enemy_danger or allow_danger_jump)
+                and (not landing_friendly or panic)):
             landing = wb(obs, config, c, lr)
             if landing is None:
                 actions[uid] = "JUMP_NORTH"
@@ -622,14 +625,16 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
             reserved.add((c, r))
             return
         # Then try to move
+        crystals = getattr(obs, "crystals", {}) or {}
         laterals = []
         for d in ("EAST", "WEST"):
             if can_go(obs, config, c, r, d):
                 dc2, dr2, _ = DIRS[d]
                 has_north = can_go(obs, config, c + dc2, r + dr2, "NORTH")
-                laterals.append((0 if has_north else 1, d))
+                has_crystal = f"{c + dc2},{r + dr2 + 1}" in crystals
+                laterals.append((0 if has_north else 1, 0 if has_crystal else 1, d))
         laterals.sort()
-        for d in ["NORTH"] + [d for _, d in laterals]:
+        for d in ["NORTH"] + [d for _, _, d in laterals]:
             if can_go(obs, config, c, r, d):
                 if try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player):
                     return
@@ -643,6 +648,12 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
         if abs(c - fc) + abs(r - fr) <= 2:
+            # If north is passable but (c,r+1) has a north wall, move there first
+            if can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config):
+                w_above = wb(obs, config, c, r + 1)
+                if w_above is not None and (w_above & BIT_N):
+                    if try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player):
+                        return
             # Determine factory's desired direction to prioritize wall removal
             wall_dirs = [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]
             if not can_go(obs, config, fc, fr, "NORTH"):
