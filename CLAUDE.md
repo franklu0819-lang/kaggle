@@ -72,6 +72,8 @@ All tests use `kaggle_environments` with the "crawl" environment. The agent is a
 
 - **`agent_v13.py`** — Based on agent_v12 with late-game survival optimizations. Key changes: (1) removed dead code; (2) BFS-aware worker wall removal prioritizes factory's lateral direction; (3) mid-game mine ROI threshold lowered (roi_threshold=50 for panic_steps 50~100); (4) more workers: up to 3 after turn 300, build even when factory stuck (stuck≥3); (5) Tier 3 lateral movement prefers directions with north exits; (6) urgent mine: build miner when adjacent mining node found (no existing miner, energy≥400, panic_steps>ps_safe); (7) worker transfer: when factory north is wall and worker has energy<80, transfer energy from trapped worker to factory. Eval vs v12: +28W across 6 opponents. Transfer (e<80) adds +10W total vs no-transfer (475W vs 465W across 6 opponents).
 
+- **`agent_v14.py`** — Based on agent_v13 with navigation and survival improvements. Key changes over v13: (1) JUMP skip: when landing point (c,r+2) is an unmined mining node and factory north is clear, skip JUMP to let urgent mine logic handle it; (2) South fallback (Tier 4): when Tier 1-3 navigation fails, allow MOVE SOUTH if jump_cd>3 (JUMP unavailable soon), preventing factory from staying IDLE when stuck; (3) more workers: max 4 after turn 400 (was 3 after turn 300). Eval vs v13: +11W total (485W vs 474W across 6 opponents). South fallback sweep: jump_cd>2 (-12W), >3 (+11W), >4 (+11W), >5 (+12W). Selected >3 as optimal balance.
+
 ### Submission Files
 
 - **`eval_v1.py`** — Evaluation script for agent_v1 vs a specific opponent version. Runs 100 games with fixed seeds, reports W/L/D and per-loss seed details. Usage: `python eval_v1.py <version>` where version maps to `agent_submit_v{N}.py`.
@@ -271,3 +273,19 @@ Based on agent_v12 with late-game survival optimizations. Key changes over v12: 
 | v51 | 59W-35L-6D, r=653 | 53W-41L-6D, r=719 | 57W-37L-6D, r=858 |
 
 Transfer threshold sweep (total wins across 6 opponents): no-transfer 465W, e<60 473W, e<70 472W, **e<80 475W**, e<90 466W.
+
+### agent_v14 (100-game eval, Kaggle scroll: 10→2, 450 ramp)
+
+Based on agent_v13 with navigation and survival improvements. Key changes over v13: (1) JUMP skip: when landing point (c,r+2) is an unmined mining node and factory north is clear, skip JUMP to let urgent mine logic handle it; (2) South fallback (Tier 4): when Tier 1-3 navigation fails, allow MOVE SOUTH if jump_cd>3, preventing factory from staying IDLE when stuck; (3) more workers: max 4 after turn 400 (was 3 after turn 300).
+
+| Opponent | v13 | v14 | diff |
+|----------|-----|-----|------|
+| v1 | 61W-34L-5D, r=927 | 70W-28L-2D, r=1219 | +9W, r+289 |
+| v2 | 71W-27L-2D, r=974 | 72W-24L-4D, r=1262 | +1W, r+289 |
+| v15 | 95W-4L-1D, r=1993 | 93W-5L-2D, r=2123 | -2W, r+130 |
+| v49 | 95W-4L-1D, r=2007 | 92W-5L-3D, r=2167 | -3W, r+160 |
+| v50 | 95W-5L-0D, r=2034 | 96W-4L-0D, r=2291 | +1W, r+260 |
+| v51 | 57W-37L-6D, r=858 | 62W-30L-8D, r=1017 | +5W, r+156 |
+| **Total** | **474W** | **485W** | **+11W** |
+
+South fallback jump_cd sweep (total wins vs v13 baseline 474W): >2 (462W, -12W), **>3 (485W, +11W)**, >4 (485W, +11W), >5 (486W, +12W). Selected >3 as optimal.
