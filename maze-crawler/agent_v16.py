@@ -16,6 +16,7 @@ STATE = {
     "mine_wait": False,       # True after BUILD_MINER, wait for mine to appear
     "mine_wait_since": 0,    # turn when we started waiting
     "last_build_turn": -999,  # track when we last built a unit
+    "pending_urgent_mine": False,  # True when waiting to build miner (skip JUMP)
 }
 
 TYPE_FACTORY, TYPE_SCOUT, TYPE_WORKER, TYPE_MINER = 0, 1, 2, 3
@@ -314,10 +315,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
     ps_safe = (12 + turn // 10) if turn <= 100 else (28 + turn // 20)
-    if panic_steps >= 50:
-        roi_threshold = 50
-    elif panic_steps >= 25:
-        roi_threshold = 100
+    if panic_steps >= 25:
+        roi_threshold = 200
     else:
         roi_threshold = 9999
 
@@ -362,18 +361,25 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         urgent_mine = (nc, nr)
                         break
     if urgent_mine:
-        if build_cd == 0 and move_cd != 0 and jump_cd!=0 and not friendly_at(occupied, (c, r + 1), my_player):
+        STATE["pending_urgent_mine"] = True
+        spawn_free = not friendly_at(occupied, (c, r + 1), my_player)
+        if build_cd == 0 and spawn_free:
+            # Can build now (regardless of move_cd)
             actions[uid] = "BUILD_MINER"
             STATE["mine_wait"] = True
             STATE["last_build_turn"] = turn
             STATE["mine_wait_since"] = turn
             STATE["mine_invested"] = urgent_mine
+            STATE["pending_urgent_mine"] = False
             reserved.add((c, r + 1))
             return
-        elif build_cd == 1 and move_cd == 0:
+        elif build_cd > 0:
+            # Waiting for build_cd, stay put
             actions[uid] = "IDLE"
             reserved.add((c, r))
             return
+    else:
+        STATE["pending_urgent_mine"] = False
 
     # ── Check if on a friendly mine with stored energy (skip JUMP to collect) ──
     on_friendly_mine = False
@@ -408,6 +414,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
 
     # ── JUMP ── (aggressive: always JUMP when available, but skip if collecting mine energy)
     skip_jump = on_friendly_mine and panic_steps > ps_safe and mine_stored_energy >= 50
+    # Skip JUMP when pending urgent mine or waiting for miner to reach node + TRANSFORM
+    if not skip_jump and (STATE.get("pending_urgent_mine") or STATE.get("mine_wait")):
+        skip_jump = True
     # Skip JUMP if landing on a reachable mining node (let urgent mine handle it)
     if not skip_jump and jump_cd == 0 and in_bounds(c, r + 2, obs, config):
         vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
@@ -442,12 +451,20 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 landing_exits = [d for d in ("NORTH", "EAST", "WEST", "SOUTH")
                                  if can_go(obs, config, c, lr, d)]
                 if landing_exits:
-                    # Two-cell trap: no NORTH exit and all lateral exits are dead-end corridors
+                    # Two-cell trap checks
                     trap = False
                     if not landing_has_north:
+                        # Lateral: no NORTH exit and all lateral exits are dead-end corridors
                         lateral = [d for d in ("EAST", "WEST") if d in landing_exits]
                         if lateral:
                             trap = all(is_lateral_dead_end(c, lr, d, obs, config) for d in lateral)
+                    # Vertical: landing has NORTH exit but (c, r+3) is a dead end
+                    if not trap and landing_has_north and in_bounds(c, lr + 1, obs, config):
+                        nr_north = can_go(obs, config, c, lr + 1, "NORTH")
+                        nr_east = can_go(obs, config, c, lr + 1, "EAST")
+                        nr_west = can_go(obs, config, c, lr + 1, "WEST")
+                        if not nr_north and not nr_east and not nr_west:
+                            trap = True
                     if not trap:
                         actions[uid] = "JUMP_NORTH"
                         reserved.add((c, lr))
@@ -596,7 +613,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             return
 
     # ── BUILD (during move cooldown) ──
-    can_build_stuck = stuck >= 3 and worker_count < 1 and energy >= 300
+    can_build_stuck = stuck >= 3 and worker_count < 2 and energy >= 300
     if move_cd != 0 and build_cd == 0 and (panic_steps >= ps_safe or can_build_stuck):
         spawn_ok = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
         if spawn_ok:
@@ -628,7 +645,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                max_workers = 1 if turn > 200 else 0
+                max_workers = 2 if turn > 300 else (1 if turn > 100 else 0)
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
                     if can_build:
