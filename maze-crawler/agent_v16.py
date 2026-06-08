@@ -217,6 +217,27 @@ def get_enemy_factory_threat(obs, config, my_player):
     return hard_block, danger
 
 
+def is_lateral_dead_end(cx, ry, direction, obs, config, max_depth=2):
+    """Check if going `direction` from (cx, ry) leads to a dead-end corridor within max_depth steps."""
+    opposite = {"EAST": "WEST", "WEST": "EAST", "NORTH": "SOUTH", "SOUTH": "NORTH"}[direction]
+    c, r = cx, ry
+    for _ in range(max_depth):
+        if not can_go(obs, config, c, r, direction):
+            return False
+        dc, dr, _ = DIRS[direction]
+        c, r = c + dc, r + dr
+        has_exit = False
+        for d in ("NORTH", "EAST", "WEST", "SOUTH"):
+            if d == opposite:
+                continue
+            if can_go(obs, config, c, r, d):
+                has_exit = True
+                break
+        if not has_exit:
+            return True
+    return False
+
+
 def factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
                      allow_crush=False, danger=None, allow_danger=False, hard_block=None):
     dc, dr, _ = DIRS[d]
@@ -292,7 +313,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     _progress = min(1.0, turn / _ramp_steps)
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
-    ps_safe = (10 + turn // 10) if turn <= 100 else (24 + turn // 20)
+    ps_safe = (12 + turn // 10) if turn <= 100 else (28 + turn // 20)
     if panic_steps >= 50:
         roi_threshold = 50
     elif panic_steps >= 25:
@@ -330,7 +351,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Urgent mine: adjacent mining node → build miner immediately or wait for cooldown ──
     spawn_ok_um = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
     urgent_mine = None
-    if spawn_ok_um and energy >= 400 and panic_steps > ps_safe and turn < 400:
+    if spawn_ok_um and energy > 300 and panic_steps > ps_safe and turn < 400:
         vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
         ex_mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
         has_miner = any(d2[4] == my_player and d2[0] == TYPE_MINER for d2 in obs.robots.values())
@@ -341,7 +362,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         urgent_mine = (nc, nr)
                         break
     if urgent_mine:
-        if build_cd == 0 and move_cd != 0 and not friendly_at(occupied, (c, r + 1), my_player):
+        if build_cd == 0 and move_cd != 0 and jump_cd!=0 and not friendly_at(occupied, (c, r + 1), my_player):
             actions[uid] = "BUILD_MINER"
             STATE["mine_wait"] = True
             STATE["last_build_turn"] = turn
@@ -417,8 +438,17 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 reserved.add((c, lr))
                 return
             else:
-                for d in ("NORTH", "EAST", "WEST", "SOUTH"):
-                    if can_go(obs, config, c, lr, d):
+                landing_has_north = can_go(obs, config, c, lr, "NORTH")
+                landing_exits = [d for d in ("NORTH", "EAST", "WEST", "SOUTH")
+                                 if can_go(obs, config, c, lr, d)]
+                if landing_exits:
+                    # Two-cell trap: no NORTH exit and all lateral exits are dead-end corridors
+                    trap = False
+                    if not landing_has_north:
+                        lateral = [d for d in ("EAST", "WEST") if d in landing_exits]
+                        if lateral:
+                            trap = all(is_lateral_dead_end(c, lr, d, obs, config) for d in lateral)
+                    if not trap:
                         actions[uid] = "JUMP_NORTH"
                         reserved.add((c, lr))
                         return
@@ -566,7 +596,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             return
 
     # ── BUILD (during move cooldown) ──
-    can_build_stuck = stuck >= 3 and worker_count < 3 and energy >= 300
+    can_build_stuck = stuck >= 3 and worker_count < 2 and energy >= 300
     if move_cd != 0 and build_cd == 0 and (panic_steps >= ps_safe or can_build_stuck):
         spawn_ok = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
         if spawn_ok:
@@ -583,7 +613,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     reserved.add((c, r))
                     return
 
-                if mine_target and energy >= 400:
+                if mine_target and energy > 300:
                     mc, mr = mine_target
                     if (c, r) == (mc, mr - 1) and spawn_ok:
                         has_miner = any(
@@ -598,11 +628,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                max_workers = 4 if turn > 400 else (3 if turn > 300 else (2 if turn > 200 else 1))
+                max_workers = 2 if turn > 300 else 1
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
-                    if not can_build and turn >= 100 and energy >= 400:
-                        can_build = True
                     if can_build:
                         actions[uid] = "BUILD_WORKER"
                         STATE["last_build_turn"] = turn
