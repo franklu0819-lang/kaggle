@@ -395,12 +395,23 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Pre-compute navigation params ──
     must_escape = (c, r) in enemy_danger
     fresh_worker = (turn - STATE.get("last_build_turn", -999)) <= 1
-    crush = not fresh_worker or (stuck >= 1) or (gap <= 3) or must_escape
-    panic = (gap <= 3) or must_escape
+    crush = not fresh_worker or (stuck >= 1) or (panic_steps <= 8) or must_escape
+    panic = (panic_steps <= 8) or must_escape
     north_open = can_go(obs, config, c, r, "NORTH")
 
+    # Pre-check: skip navigation when factory should collect mine energy
+    skip_nav_for_mine = False
+    if panic_steps > ps_safe and (STATE.get("mine_wait") or not must_escape):
+        for mk, mv in getattr(obs, "mines", {}).items():
+            mc2, mr2 = parse_key(mk)
+            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
+                skip_nav_for_mine = True
+                break
+        if not skip_nav_for_mine and STATE.get("mine_wait"):
+            skip_nav_for_mine = True
+
     # ── Tier 0: Pessimistic BFS — narrow (3 cols: c±1), goals r+3~r+6 ──
-    if move_cd == 0:
+    if move_cd == 0 and not skip_nav_for_mine:
         narrow_goals = [(c2, row) for c2 in range(max(0, c - 1), min(width, c + 2))
                         for row in range(r + 3, min(r + 5, obs.northBound + 1))
                         if in_bounds(c2, row, obs, config)]
@@ -433,8 +444,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 move_targets.append((c + dc_t, r + dr_t))
         danger_escape = bool(move_targets) and all(t in enemy_danger for t in move_targets)
 
-        allow_danger_jump = (gap <= 3)
-        panic = (gap <= 3) or danger_escape
+        allow_danger_jump = (panic_steps <= 8)
+        panic = (panic_steps <= 8) or danger_escape
         lr = r + 2
         landing_friendly = friendly_at(occupied, (c, lr), my_player)
         if (in_bounds(c, lr, obs, config)
@@ -451,27 +462,24 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 landing_exits = [d for d in ("NORTH", "EAST", "WEST", "SOUTH")
                                  if can_go(obs, config, c, lr, d)]
                 if landing_exits:
-                    # Two-cell trap checks
+                    # Trap: no NORTH exit and remaining exits are all dead ends
                     trap = False
                     if not landing_has_north:
-                        # Lateral: no NORTH exit and all lateral exits are dead-end corridors
-                        lateral = [d for d in ("EAST", "WEST") if d in landing_exits]
-                        if lateral:
-                            trap = all(is_lateral_dead_end(c, lr, d, obs, config) for d in lateral)
-                    # Vertical: landing has NORTH exit but (c, r+3) is a dead end
-                    if not trap and landing_has_north and in_bounds(c, lr + 1, obs, config):
-                        nr_north = can_go(obs, config, c, lr + 1, "NORTH")
-                        nr_east = can_go(obs, config, c, lr + 1, "EAST")
-                        nr_west = can_go(obs, config, c, lr + 1, "WEST")
-                        if not nr_north and not nr_east and not nr_west:
-                            trap = True
+                        non_south = [d for d in ("EAST", "WEST") if d in landing_exits]
+                        if non_south:
+                            trap = all(is_lateral_dead_end(c, lr, d, obs, config) for d in non_south)
+                        else:
+                            # Only SOUTH exit → check r+1 lateral exits
+                            mid_lat = [d for d in ("EAST", "WEST")
+                                       if can_go(obs, config, c, r + 1, d)]
+                            trap = not mid_lat
                     if not trap:
                         actions[uid] = "JUMP_NORTH"
                         reserved.add((c, lr))
                         return
 
         # Lateral jumps: emergency (gap≤3) or danger escape
-        if gap <= 3 or danger_escape:
+        if panic_steps <= 8 or danger_escape:
             for jd, (jdc, jdr) in (("JUMP_EAST", (2, 0)), ("JUMP_WEST", (-2, 0))):
                 lc, lr2 = c + jdc, r + jdr
                 if not in_bounds(lc, lr2, obs, config):
@@ -516,6 +524,15 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 reserved.add((c, r))
                 return
 
+        # Also check mine_target from urgent mine (may be distance 2)
+        if not my_mines_nearby and STATE.get("mine_invested") and panic_steps > ps_safe:
+            mi = STATE["mine_invested"]
+            for mk, mv in getattr(obs, "mines", {}).items():
+                mc2, mr2 = parse_key(mk)
+                if mv[2] == my_player and (mc2, mr2) == mi:
+                    my_mines_nearby.append((mc2, mr2))
+                    break
+
         if my_mines_nearby and panic_steps > ps_safe:
             mc2, mr2 = my_mines_nearby[0]
             if (mc2, mr2) == (c, r):
@@ -559,7 +576,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             goals = [mine_target] + goals
 
     # Update panic for post-JUMP navigation context
-    panic = (gap <= 3) or must_escape
+    panic = (panic_steps <= 8) or must_escape
     north_open = can_go(obs, config, c, r, "NORTH")
 
     # Dead-end check: skip Tier 1/2 if r+1 is a complete dead end and no jump available
@@ -572,7 +589,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         if not nr_north and not nr_east and not nr_west:
             skip_tier12 = True
 
-    if not skip_tier12:
+    if not skip_tier12 and not skip_nav_for_mine:
         # Tier 1: Direct NORTH (MOVE)
         if move_cd == 0 and north_open:
             if factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
@@ -590,7 +607,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         return
 
     # Tier 3: Unconditional lateral with north-exit and crystal preference (MOVE)
-    if move_cd == 0:
+    if move_cd == 0 and not skip_nav_for_mine:
         crystals = getattr(obs, "crystals", {}) or {}
         lat_dirs = []
         for d in ew:
@@ -607,7 +624,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 return
 
     # Tier 4: SOUTH fallback (MOVE, only when JUMP unavailable)
-    if move_cd == 0 and jump_cd > 3 and can_go(obs, config, c, r, "SOUTH"):
+    if move_cd == 0 and not skip_nav_for_mine and jump_cd > 3 and can_go(obs, config, c, r, "SOUTH"):
         if factory_try_move(uid, c, r, "SOUTH", obs, config, actions, reserved, occupied, my_player,
                             allow_crush=crush, danger=enemy_danger, allow_danger=True, hard_block=enemy_hard_block):
             return
