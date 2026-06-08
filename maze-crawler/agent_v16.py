@@ -350,7 +350,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Urgent mine: adjacent mining node → build miner immediately or wait for cooldown ──
     spawn_ok_um = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
     urgent_mine = None
-    if spawn_ok_um and energy > 300 and panic_steps > ps_safe and turn < 350:
+    if spawn_ok_um and energy > 300 and panic_steps > ps_safe and turn < 300:
         vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
         ex_mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
         has_miner = any(d2[4] == my_player and d2[0] == TYPE_MINER for d2 in obs.robots.values())
