@@ -390,6 +390,29 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     panic = (gap <= 3) or must_escape
     north_open = can_go(obs, config, c, r, "NORTH")
 
+    # ── Mine collection (before navigation/JUMP so factory doesn't skip past it) ──
+    if move_cd == 0 and panic_steps > ps_safe:
+        my_mines_nearby = []
+        for mk, mv in getattr(obs, "mines", {}).items():
+            mc2, mr2 = parse_key(mk)
+            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
+                my_mines_nearby.append((mc2, mr2))
+        if my_mines_nearby:
+            mc2, mr2 = my_mines_nearby[0]
+            if (mc2, mr2) == (c, r):
+                actions[uid] = "IDLE"
+                reserved.add((c, r))
+                return
+            for d in ("NORTH", "EAST", "WEST", "SOUTH"):
+                dc2, dr2, _ = DIRS[d]
+                if (c + dc2, r + dr2) == (mc2, mr2):
+                    if factory_try_move(uid, c, r, d, obs, config, actions, reserved, occupied, my_player,
+                                        allow_crush=crush, danger=enemy_danger, allow_danger=True, hard_block=enemy_hard_block):
+                        return
+            actions[uid] = "IDLE"
+            reserved.add((c, r))
+            return
+
     # ── Tier 0: Pessimistic BFS — narrow (3 cols: c±1), goals r+3~r+6 ──
     if move_cd == 0:
         narrow_goals = [(c2, row) for c2 in range(max(0, c - 1), min(width, c + 2))
@@ -687,28 +710,30 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
         if abs(c - fc) + abs(r - fr) <= 2:
+            north_passable = can_go(obs, config, c, r, "NORTH")
             # If north is passable but (c,r+1) has a north wall, move there first
-            if can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config):
+            if north_passable and in_bounds(c, r + 1, obs, config):
                 w_above = wb(obs, config, c, r + 1)
                 if w_above is not None and (w_above & BIT_N):
                     if try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player):
                         return
-            # Determine factory's desired direction to prioritize wall removal
-            wall_dirs = [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]
-            if not can_go(obs, config, fc, fr, "NORTH"):
-                north_goals = [(c2, row) for c2 in range(config.width)
-                               for row in range(fr + 2, min(fr + 5, obs.northBound + 1))
-                               if in_bounds(c2, row, obs, config)]
-                bfs_dir, _ = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
-                if bfs_dir and bfs_dir in ("EAST", "WEST"):
-                    bit = {"EAST": BIT_E, "WEST": BIT_W}[bfs_dir]
-                    wall_dirs = [(bfs_dir, bit)] + [d for d in wall_dirs if d[0] != bfs_dir]
-            for d, bit in wall_dirs:
-                w = wb(obs, config, c, r)
-                if w is not None and (w & bit):
-                    actions[uid] = f"REMOVE_{d}"
-                    reserved.add((c, r))
-                    return
+            # Only remove walls when north is blocked
+            if not north_passable:
+                wall_dirs = [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]
+                if not can_go(obs, config, fc, fr, "NORTH"):
+                    north_goals = [(c2, row) for c2 in range(config.width)
+                                   for row in range(fr + 2, min(fr + 5, obs.northBound + 1))
+                                   if in_bounds(c2, row, obs, config)]
+                    bfs_dir, _ = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
+                    if bfs_dir and bfs_dir in ("EAST", "WEST"):
+                        bit = {"EAST": BIT_E, "WEST": BIT_W}[bfs_dir]
+                        wall_dirs = [(bfs_dir, bit)] + [d for d in wall_dirs if d[0] != bfs_dir]
+                for d, bit in wall_dirs:
+                    w = wb(obs, config, c, r)
+                    if w is not None and (w & bit):
+                        actions[uid] = f"REMOVE_{d}"
+                        reserved.add((c, r))
+                        return
 
     if factory_pos and STATE.get("factory_stuck", 0) >= 2 and energy >= wall_cost + 20:
         fc, fr = factory_pos
