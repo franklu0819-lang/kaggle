@@ -424,7 +424,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
 
     # ── JUMP ── (aggressive: always JUMP when available, but skip if collecting mine energy)
-    skip_jump = on_friendly_mine and panic_steps > ps_safe and mine_stored_energy >= 50
+    skip_jump = on_friendly_mine and panic_steps > ps_safe
     # Skip JUMP when pending urgent mine or waiting for miner to reach node + TRANSFORM
     if not skip_jump and (STATE.get("pending_urgent_mine") or STATE.get("mine_wait")):
         skip_jump = True
