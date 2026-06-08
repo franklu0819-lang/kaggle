@@ -289,3 +289,44 @@ Based on agent_v13 with navigation and survival improvements. Key changes over v
 | **Total** | **474W** | **504W** | **+30W** |
 
 South fallback jump_cd sweep: >2 (-12W), **>3 (+11W)**, >4 (+11W), >5 (+12W). Selected >3.
+
+### agent_v15 (100-game eval)
+
+Based on agent_v14 with three changes: (1) JUMP skip double-check: require both `can_go(c,r,"NORTH")` and `can_go(c,r+1,"NORTH")` before skipping JUMP on mining node; (2) Tier 0 narrow pessimistic BFS added before JUMP: searches 3-column corridor (c±1), goals r+3~r+6, executes MOVE when first step is northward (dr2>0); (3) Urgent mine turn<300 limit. Also changed Tier 2 from pessimistic to optimistic BFS.
+
+| Opponent | v14 | v15 | diff |
+|----------|-----|-----|------|
+| v1 | 70W-26L-4D | 78W-19L-3D | +8W, -393r |
+| v2 | 82W-16L-2D | 82W-14L-4D | 0W, -693r |
+| v49 | 95W-3L-2D | 99W-0L-1D | +4W, -718r |
+| v50 | 95W-5L-0D | 97W-3L-0D | +2W, -673r |
+| v51 | 68W-24L-8D | 73W-22L-5D | +5W, -418r |
+| **Total** | **504W** | **529W** | **+25W** |
+
+Win rates improved across all opponents (+0~+8W), but reward dropped significantly (-393~-718) due to Tier 0 replacing JUMP with MOVE (1 cell vs 2 rows).
+
+### agent_v16 (experimental, dc2≠0 variant)
+
+Based on agent_v15 with Tier 0 direction filter changed to dc2≠0 (first step must be lateral) and added path_len≤4 limit. Goals narrowed to r+3~r+4. Also changed bfs_first_step to return (direction, path_length) tuple.
+
+Tested as dc2≠0 + path_len≤4: roughly flat vs v14 (±1-5W win rate, -169~-616 reward). Tier 0 triggers too rarely under this strict condition.
+
+### agent_v17 (current best, dr2>0 + path_len≤5)
+
+Based on agent_v15 with path_len≤5 limit and goals narrowed to r+3~r+4. Keeps dr2>0 direction filter. turn<300 for urgent mine. Tier 2 uses pessimistic BFS.
+
+Key insight: path_len≤5 filters out long detour paths (6+ steps) while keeping short L-shaped paths (lateral 1 step + northward 4 steps). This reduces unnecessary MOVE replacements of JUMP while maintaining v15's high win rates.
+
+| Opponent | v15 reward | v17 reward | improvement |
+|----------|-----------|-----------|-------------|
+| v1 | -393 | -247 | +146 |
+| v2 | -693 | -579 | +114 |
+| v49 | -718 | -668 | +50 |
+| v50 | -673 | -627 | +46 |
+| v51 | -418 | -368 | +50 |
+
+Win rates: v1 80%, v2 82%, v49 99%, v50 97%, v51 73% — same or better than v15.
+
+#### bfs_first_step signature change (v16+)
+
+From v16 onwards, `bfs_first_step` returns `(first_dir, path_length)` tuple instead of just `first_dir`. Returns `(None, 0)` when no path found. `bfs_to_row` wrapper still returns just the direction.

@@ -64,6 +64,21 @@ def can_go(obs, config, c, r, d):
     return True
 
 
+def can_go_semi_optimistic(obs, config, c, r, d):
+    """Semi-optimistic: current cell pessimistic (unknown = wall), target cell optimistic (unknown = passable)."""
+    dc, dr, bit = DIRS[d]
+    nc, nr = c + dc, r + dr
+    if not in_bounds(nc, nr, obs, config):
+        return False
+    w = wb(obs, config, c, r)
+    if w is None or (w & bit):  # current cell: pessimistic
+        return False
+    w2 = wb(obs, config, nc, nr)
+    if w2 is not None and (w2 & OPPOSITE_BIT[d]):  # target cell: optimistic
+        return False
+    return True
+
+
 def can_go_pessimistic(obs, config, c, r, d):
     """Pessimistic: unknown cells treated as walls."""
     dc, dr, bit = DIRS[d]
@@ -74,6 +89,9 @@ def can_go_pessimistic(obs, config, c, r, d):
     if w is None or (w & bit):
         return False
     w2 = wb(obs, config, nc, nr)
+    if w2 is None or (w2 & OPPOSITE_BIT[d]):
+        return False
+    return True
     if w2 is None or (w2 & OPPOSITE_BIT[d]):
         return False
     return True
@@ -96,20 +114,22 @@ def update_state(obs, config, my_player):
 
 
 def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=500):
+    """Returns (first_dir, path_length) or (None, 0) if no path found."""
     if not goals:
-        return None
+        return None, 0
     goal_set = set(goals)
     if start in goal_set:
-        return None
-    q = deque([(start, None)])
+        return None, 0
+    q = deque([(start, None, 0)])  # (pos, first_dir, dist)
     visited = {start}
-    best_fd, best_dist = None, 999999
+    best_fd, best_dist, best_pl = None, 999999, 999999
     while q:
-        cur, first_d = q.popleft()
+        cur, first_d, path_len = q.popleft()
         dist = min(abs(cur[0] - g[0]) + abs(cur[1] - g[1]) for g in goals)
         if dist < best_dist:
             best_dist = dist
             best_fd = first_d
+            best_pl = path_len
         for d in ("NORTH", "EAST", "WEST", "SOUTH"):
             if not passable_fn(obs, config, cur[0], cur[1], d):
                 continue
@@ -119,18 +139,19 @@ def bfs_first_step(start, goals, obs, config, passable_fn, max_nodes=500):
                 continue
             visited.add(nxt)
             fd = first_d or d
+            pl = path_len + 1
             if nxt in goal_set:
-                return fd
-            q.append((nxt, fd))
+                return fd, pl
+            q.append((nxt, fd, pl))
             if len(visited) >= max_nodes:
-                return best_fd
-    return best_fd
+                return best_fd, best_pl
+    return best_fd, best_pl
 
 
 def bfs_to_row(start, row, obs, config, passable_fn):
     goals = [(c, row) for c in range(config.width) if in_bounds(c, row, obs, config)]
-    return bfs_first_step(start, goals, obs, config, passable_fn)
-
+    fd, _ = bfs_first_step(start, goals, obs, config, passable_fn)
+    return fd
 
 def bfs_distance(start, goal, obs, config, passable_fn, max_nodes=500):
     if start == goal:
@@ -372,10 +393,10 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Tier 0: Pessimistic BFS — narrow (3 cols: c±1), goals r+3~r+6 ──
     if move_cd == 0:
         narrow_goals = [(c2, row) for c2 in range(max(0, c - 1), min(width, c + 2))
-                        for row in range(r + 3, min(r + 7, obs.northBound + 1))
+                        for row in range(r + 3, min(r + 5, obs.northBound + 1))
                         if in_bounds(c2, row, obs, config)]
-        step_dir = bfs_first_step((c, r), narrow_goals, obs, config, can_go_pessimistic, max_nodes=500)
-        if step_dir:
+        step_dir, path_len = bfs_first_step((c, r), narrow_goals, obs, config, can_go_pessimistic, max_nodes=500)
+        if step_dir and path_len <= 5:
             dc2, dr2, _ = DIRS[step_dir]
             if dr2 > 0:
                 if factory_try_move(uid, c, r, step_dir, obs, config, actions, reserved, occupied, my_player,
@@ -529,9 +550,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                                 allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block):
                 return
 
-        # Tier 2: Optimistic BFS to goals (MOVE)
+        # Tier 2: Pessimistic BFS to goals (MOVE)
         if move_cd == 0:
-            step_dir = bfs_first_step((c, r), goals, obs, config, can_go, max_nodes=500)
+            step_dir, _ = bfs_first_step((c, r), goals, obs, config, can_go_pessimistic, max_nodes=500)
             if step_dir:
                 dc2, dr2, _ = DIRS[step_dir]
                 if dr2 >= 0:
@@ -678,7 +699,7 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 north_goals = [(c2, row) for c2 in range(config.width)
                                for row in range(fr + 2, min(fr + 5, obs.northBound + 1))
                                if in_bounds(c2, row, obs, config)]
-                bfs_dir = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
+                bfs_dir, _ = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
                 if bfs_dir and bfs_dir in ("EAST", "WEST"):
                     bit = {"EAST": BIT_E, "WEST": BIT_W}[bfs_dir]
                     wall_dirs = [(bfs_dir, bit)] + [d for d in wall_dirs if d[0] != bfs_dir]
@@ -693,7 +714,7 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
         fc, fr = factory_pos
         north_cell = (fc, fr + 1)
         if (c, r) != north_cell and in_bounds(north_cell[0], north_cell[1], obs, config):
-            step = bfs_first_step((c, r), [north_cell], obs, config, can_go)
+            step, _ = bfs_first_step((c, r), [north_cell], obs, config, can_go)
             if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
                 return
 
@@ -777,7 +798,7 @@ def miner_action(uid, data, obs, config, actions, reserved, occupied, my_player)
 
     if all_nodes:
         target = min(all_nodes, key=lambda n: abs(n[0] - c) + abs(n[1] - r))
-        step = bfs_first_step((c, r), [target], obs, config, can_go)
+        step, _ = bfs_first_step((c, r), [target], obs, config, can_go)
         if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
             return
 
@@ -810,7 +831,7 @@ def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player)
         )
         if best:
             _, target = best
-            step = bfs_first_step((c, r), [target], obs, config, can_go)
+            step, _ = bfs_first_step((c, r), [target], obs, config, can_go)
             if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
                 return
 
@@ -828,7 +849,7 @@ def scout_action(uid, data, obs, config, actions, reserved, occupied, my_player)
             target_col = min(half - 1, c + 3)
         else:
             target_col = max(half, c - 3)
-        step = bfs_first_step((c, r), [(target_col, target_row)], obs, config, can_go)
+        step, _ = bfs_first_step((c, r), [(target_col, target_row)], obs, config, can_go)
         if step and try_move(uid, c, r, step, obs, config, actions, reserved, occupied, my_player):
             return
 
