@@ -715,15 +715,6 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
             factory_uid = uid2
             break
 
-    if gap <= 1 and factory_pos and energy > 5:
-        fc, fr = factory_pos
-        for d, (dc, dr, _) in [("NORTH", DIRS["NORTH"]), ("SOUTH", DIRS["SOUTH"]),
-                                 ("EAST", DIRS["EAST"]), ("WEST", DIRS["WEST"])]:
-            if (c + dc, r + dr) == (fc, fr) and can_go(obs, config, c, r, d):
-                actions[uid] = f"TRANSFER_{d}"
-                reserved.add((c, r))
-                return
-
     if factory_pos and (c, r) == (factory_pos[0], factory_pos[1] + 1):
         # Remove north wall first if blocking factory path
         w = wb(obs, config, c, r)
@@ -755,28 +746,11 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
         if abs(c - fc) + abs(r - fr) <= 2:
-            # If north is passable but (c,r+1) has a north wall, move there first
             if can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config):
                 w_above = wb(obs, config, c, r + 1)
                 if w_above is not None and (w_above & BIT_N):
                     if try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player):
                         return
-            # Determine factory's desired direction to prioritize wall removal
-            wall_dirs = [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W)]
-            if not can_go(obs, config, fc, fr, "NORTH"):
-                north_goals = [(c2, row) for c2 in range(config.width)
-                               for row in range(fr + 2, min(fr + 5, obs.northBound + 1))
-                               if in_bounds(c2, row, obs, config)]
-                bfs_dir, _ = bfs_first_step((fc, fr), north_goals, obs, config, can_go_pessimistic)
-                if bfs_dir and bfs_dir in ("EAST", "WEST"):
-                    bit = {"EAST": BIT_E, "WEST": BIT_W}[bfs_dir]
-                    wall_dirs = [(bfs_dir, bit)] + [d for d in wall_dirs if d[0] != bfs_dir]
-            for d, bit in wall_dirs:
-                w = wb(obs, config, c, r)
-                if w is not None and (w & bit):
-                    actions[uid] = f"REMOVE_{d}"
-                    reserved.add((c, r))
-                    return
 
     if factory_pos and STATE.get("factory_stuck", 0) >= 2 and energy >= wall_cost + 20:
         fc, fr = factory_pos
@@ -817,19 +791,11 @@ def worker_action(uid, data, obs, config, actions, reserved, occupied, my_player
                 reserved.add((c, r))
                 return
 
-    # Low energy guard: no walls to break → IDLE
-    if energy < 30 and factory_pos:
-        fc, fr = factory_pos
-        nearby_walls = False
-        for d, bit in [("NORTH", BIT_N), ("EAST", BIT_E), ("WEST", BIT_W), ("SOUTH", BIT_S)]:
-            w = wb(obs, config, c, r)
-            if w is not None and (w & bit):
-                nearby_walls = True
-                break
-        if not nearby_walls:
-            actions[uid] = "IDLE"
-            reserved.add((c, r))
-            return
+    # Low energy guard: IDLE to save energy
+    if energy < 30:
+        actions[uid] = "IDLE"
+        reserved.add((c, r))
+        return
 
     target_row = r + 1
     if factory_pos:
