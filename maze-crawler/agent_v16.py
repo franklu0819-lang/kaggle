@@ -461,7 +461,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 if landing_exits:
                     # Trap: no NORTH exit and remaining exits are all dead ends
                     trap = False
-                    if not landing_has_north:
+                    if not landing_has_north and stuck < 6:
                         non_south = [d for d in ("EAST", "WEST") if d in landing_exits]
                         if non_south:
                             trap = all(is_lateral_dead_end(c, lr, d, obs, config) for d in non_south)
