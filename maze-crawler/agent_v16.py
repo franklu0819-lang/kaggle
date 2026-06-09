@@ -386,7 +386,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     mine_stored_energy = 0
     for mk, mv in getattr(obs, "mines", {}).items():
         mc2, mr2 = parse_key(mk)
-        if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
+        if mv[2] == my_player and ((mc2, mr2) in ((c, r), (c+1, r), (c-1, r), (c, r+1)) or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
             on_friendly_mine = True
             if (mc2, mr2) == (c, r):
                 mine_stored_energy = mv[0]
@@ -502,7 +502,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         my_mines_nearby = []
         for mk, mv in getattr(obs, "mines", {}).items():
             mc2, mr2 = parse_key(mk)
-            if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
+            if mv[2] == my_player and ((mc2, mr2) in ((c, r), (c+1, r), (c-1, r), (c, r+1)) or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
                 my_mines_nearby.append((mc2, mr2))
 
         if STATE["mine_wait"]:
@@ -628,7 +628,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             return
 
     # ── BUILD (during move cooldown) ──
-    can_build_stuck = stuck >= 3 and worker_count < 2 and energy >= 300
+    max_workers = 3 if turn > 400 else (2 if turn > 300 else 1 if turn > 100 else 0)
+    can_build_stuck = stuck >= 3 and worker_count < max_workers and energy >= 400
     if move_cd != 0 and build_cd == 0 and (panic_steps >= ps_safe or can_build_stuck):
         spawn_ok = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
         if spawn_ok:
@@ -637,7 +638,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 my_mines_nearby_build = []
                 for mk, mv in getattr(obs, "mines", {}).items():
                     mc2, mr2 = parse_key(mk)
-                    if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
+                    if mv[2] == my_player and ((mc2, mr2) in ((c, r), (c+1, r), (c-1, r), (c, r+1)) or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
                         my_mines_nearby_build.append((mc2, mr2))
 
                 if my_mines_nearby_build and panic_steps > ps_safe:
@@ -660,12 +661,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                max_workers = 2 if turn > 300 else (1 if turn > 100 else 0)
-                if turn > 350 and energy > 1000 and scout_count < 1:
-                    actions[uid] = "BUILD_SCOUT"
-                    STATE["last_build_turn"] = turn
-                    reserved.add(spawn)
-                    return
+                # if turn > 350 and energy > 1000 and scout_count < 1:
+                #     actions[uid] = "BUILD_SCOUT"
+                #     STATE["last_build_turn"] = turn
+                #     reserved.add(spawn)
+                #     return
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
                     if can_build:
