@@ -387,7 +387,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     if move_cd == 0:
         for mk, mv in getattr(obs, "mines", {}).items():
             mc2, mr2 = parse_key(mk)
-            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 2:
+            if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
                 on_friendly_mine = True
                 if (mc2, mr2) == (c, r):
                     mine_stored_energy = mv[0]
@@ -449,7 +449,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         if (in_bounds(c, lr, obs, config)
                 and (c, lr) not in enemy_hard_block
                 and ((c, lr) not in enemy_danger or allow_danger_jump)
-                and (not landing_friendly or panic)):
+                and (not landing_friendly or panic or turn > 400)):
             landing = wb(obs, config, c, lr)
             if landing is None:
                 actions[uid] = "JUMP_NORTH"
