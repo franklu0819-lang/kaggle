@@ -661,11 +661,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             reserved.add(spawn)
                             return
 
-                # if turn > 350 and energy > 1000 and scout_count < 1:
-                #     actions[uid] = "BUILD_SCOUT"
-                #     STATE["last_build_turn"] = turn
-                #     reserved.add(spawn)
-                #     return
+                if turn < 300 and energy > 1000 and scout_count < 1:
+                    actions[uid] = "BUILD_SCOUT"
+                    STATE["last_build_turn"] = turn
+                    reserved.add(spawn)
+                    return
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
                     if can_build:
