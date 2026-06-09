@@ -350,7 +350,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Urgent mine: adjacent mining node → build miner immediately or wait for cooldown ──
     spawn_ok_um = can_go(obs, config, c, r, "NORTH") and in_bounds(c, r + 1, obs, config)
     urgent_mine = None
-    if spawn_ok_um and energy > 300 and panic_steps > ps_safe and turn < 300:
+    if spawn_ok_um and energy > 300 and energy < 2000 and panic_steps > ps_safe and turn < 350:
         vis_nodes = set(parse_key(k) for k in (getattr(obs, "miningNodes", {}) or {}))
         ex_mines = set(parse_key(k) for k in getattr(obs, "mines", {}).keys())
         has_miner = any(d2[4] == my_player and d2[0] == TYPE_MINER for d2 in obs.robots.values())
@@ -381,15 +381,16 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     else:
         STATE["pending_urgent_mine"] = False
 
-    # ── Check if on a friendly mine with stored energy (skip JUMP to collect) ──
+    # ── Check if on or near a friendly mine (skip JUMP to collect) ──
     on_friendly_mine = False
     mine_stored_energy = 0
     if move_cd == 0:
         for mk, mv in getattr(obs, "mines", {}).items():
             mc2, mr2 = parse_key(mk)
-            if mv[2] == my_player and (mc2, mr2) == (c, r):
+            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 2:
                 on_friendly_mine = True
-                mine_stored_energy = mv[0]
+                if (mc2, mr2) == (c, r):
+                    mine_stored_energy = mv[0]
                 break
 
     # ── Pre-compute navigation params ──
@@ -401,13 +402,9 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
 
     # Pre-check: skip navigation when factory should collect mine energy
     skip_nav_for_mine = False
-    mine_collected = on_friendly_mine and energy >= 2000 and jump_cd == 0
+    mine_collected = on_friendly_mine and energy >= 3000 and jump_cd == 0
     if panic_steps > ps_safe and (STATE.get("mine_wait") or not must_escape) and not mine_collected:
-        for mk, mv in getattr(obs, "mines", {}).items():
-            mc2, mr2 = parse_key(mk)
-            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
-                skip_nav_for_mine = True
-                break
+        skip_nav_for_mine = on_friendly_mine
         if not skip_nav_for_mine and STATE.get("mine_wait"):
             skip_nav_for_mine = True
 
@@ -425,7 +422,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
 
     # ── JUMP ── (aggressive: always JUMP when available, but skip if collecting mine energy)
-    skip_jump = on_friendly_mine and panic_steps > ps_safe and not (energy >= 2000 and jump_cd == 0)
+    skip_jump = on_friendly_mine and panic_steps > ps_safe and not (energy >= 3000 and jump_cd == 0)
     # Skip JUMP when pending urgent mine or waiting for miner to reach node + TRANSFORM
     if not skip_jump and (STATE.get("pending_urgent_mine") or STATE.get("mine_wait")):
         skip_jump = True
@@ -479,8 +476,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         reserved.add((c, lr))
                         return
 
-        # Lateral jumps: emergency (gap≤3) or danger escape
-        if gap <= 5 or danger_escape:
+        # Lateral jumps: emergency (gap≤3) or danger escape or stuck
+        if gap <= 5 or danger_escape or stuck >= 6:
             for jd, (jdc, jdr) in (("JUMP_EAST", (2, 0)), ("JUMP_WEST", (-2, 0))):
                 lc, lr2 = c + jdc, r + jdr
                 if not in_bounds(lc, lr2, obs, config):
@@ -664,6 +661,11 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                             return
 
                 max_workers = 2 if turn > 300 else (1 if turn > 100 else 0)
+                if turn > 350 and energy > 1000 and scout_count < 1:
+                    actions[uid] = "BUILD_SCOUT"
+                    STATE["last_build_turn"] = turn
+                    reserved.add(spawn)
+                    return
                 if worker_count < max_workers:
                     can_build = (energy >= 500 and (turn < 150 or energy >= 700))
                     if can_build:
