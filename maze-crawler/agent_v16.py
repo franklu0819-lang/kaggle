@@ -382,15 +382,20 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         STATE["pending_urgent_mine"] = False
 
     # ── Check if on or near a friendly mine (skip JUMP to collect) ──
-    on_friendly_mine = False
+    on_mine = False
+    mine_nearby_pos = None
     mine_stored_energy = 0
     for mk, mv in getattr(obs, "mines", {}).items():
         mc2, mr2 = parse_key(mk)
-        if mv[2] == my_player and ((mc2, mr2) in ((c, r), (c+1, r), (c-1, r), (c, r+1)) or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
-            on_friendly_mine = True
+        if mv[2] == my_player:
             if (mc2, mr2) == (c, r):
+                on_mine = True
                 mine_stored_energy = mv[0]
+            elif (mc2, mr2) in ((c+1, r), (c-1, r), (c, r+1), (c-1, r+1), (c+1, r+1), (c, r+2)):
+                mine_nearby_pos = (mc2, mr2)
+        if on_mine or mine_nearby_pos:
             break
+    on_friendly_mine = on_mine or mine_nearby_pos is not None
 
     # ── Pre-compute navigation params ──
     must_escape = (c, r) in enemy_danger
@@ -401,11 +406,27 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
 
     # Pre-check: skip navigation when factory should collect mine energy
     skip_nav_for_mine = False
-    mine_collected = on_friendly_mine and energy >= 3000 and jump_cd == 0
+    mine_collected = on_mine and energy >= 3000 and jump_cd == 0
     if panic_steps > ps_safe and (STATE.get("mine_wait") or not must_escape) and not mine_collected:
-        skip_nav_for_mine = on_friendly_mine
+        skip_nav_for_mine = on_mine
         if not skip_nav_for_mine and STATE.get("mine_wait"):
             skip_nav_for_mine = True
+
+    # ── Move toward adjacent mine if safe ──
+    if mine_nearby_pos and panic_steps > ps_safe and move_cd == 0 and not skip_nav_for_mine:
+        mc, mr = mine_nearby_pos
+        moved = False
+        if mc > c:
+            moved = factory_try_move(uid, c, r, "EAST", obs, config, actions, reserved, occupied, my_player,
+                                     allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block)
+        elif mc < c:
+            moved = factory_try_move(uid, c, r, "WEST", obs, config, actions, reserved, occupied, my_player,
+                                     allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block)
+        if not moved and mr > r:
+            moved = factory_try_move(uid, c, r, "NORTH", obs, config, actions, reserved, occupied, my_player,
+                                     allow_crush=crush, danger=enemy_danger, allow_danger=panic, hard_block=enemy_hard_block)
+        if moved:
+            return
 
     # ── Tier 0: Pessimistic BFS — narrow (3 cols: c±1), goals r+3~r+6 ──
     if move_cd == 0 and not skip_nav_for_mine:
@@ -421,7 +442,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
 
     # ── JUMP ── (aggressive: always JUMP when available, but skip if collecting mine energy)
-    skip_jump = on_friendly_mine and panic_steps > ps_safe and not (energy >= 3000 and jump_cd == 0)
+    skip_jump = on_mine and panic_steps > ps_safe and not (energy >= 3000 and jump_cd == 0)
     # Skip JUMP when pending urgent mine or waiting for miner to reach node + TRANSFORM
     if not skip_jump and (STATE.get("pending_urgent_mine") or STATE.get("mine_wait")):
         skip_jump = True
@@ -448,7 +469,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         if (in_bounds(c, lr, obs, config)
                 and (c, lr) not in enemy_hard_block
                 and ((c, lr) not in enemy_danger or allow_danger_jump)
-                and (not landing_friendly or panic or turn > 400)):
+                and (not landing_friendly or panic)):
             landing = wb(obs, config, c, lr)
             if landing is None:
                 actions[uid] = "JUMP_NORTH"
