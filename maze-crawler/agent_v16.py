@@ -401,7 +401,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
 
     # Pre-check: skip navigation when factory should collect mine energy
     skip_nav_for_mine = False
-    if panic_steps > ps_safe and (STATE.get("mine_wait") or not must_escape):
+    mine_collected = on_friendly_mine and energy >= 2000 and jump_cd == 0
+    if panic_steps > ps_safe and (STATE.get("mine_wait") or not must_escape) and not mine_collected:
         for mk, mv in getattr(obs, "mines", {}).items():
             mc2, mr2 = parse_key(mk)
             if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
@@ -424,7 +425,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     return
 
     # ── JUMP ── (aggressive: always JUMP when available, but skip if collecting mine energy)
-    skip_jump = on_friendly_mine and panic_steps > ps_safe
+    skip_jump = on_friendly_mine and panic_steps > ps_safe and not (energy >= 2000 and jump_cd == 0)
     # Skip JUMP when pending urgent mine or waiting for miner to reach node + TRANSFORM
     if not skip_jump and (STATE.get("pending_urgent_mine") or STATE.get("mine_wait")):
         skip_jump = True
