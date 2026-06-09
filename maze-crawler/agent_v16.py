@@ -566,7 +566,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     for rr in range(r + 1, min(wr + 2, obs.northBound + 1)):
                         if in_bounds(wc, rr, obs, config):
                             goals.insert(0, (wc, rr))
-    if mine_target:
+    if mine_target and turn < 350:
         approach = (mine_target[0], mine_target[1] - 1)
         if approach[1] >= r and in_bounds(approach[0], approach[1], obs, config):
             goals = [approach] + goals
