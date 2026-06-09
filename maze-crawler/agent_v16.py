@@ -645,7 +645,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                     reserved.add((c, r))
                     return
 
-                if mine_target and energy > 300:
+                if mine_target and energy > 300 and energy < 2000 and turn < 350:
                     mc, mr = mine_target
                     if (c, r) == (mc, mr - 1) and spawn_ok:
                         has_miner = any(
