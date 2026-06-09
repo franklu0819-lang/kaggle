@@ -384,14 +384,13 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Check if on or near a friendly mine (skip JUMP to collect) ──
     on_friendly_mine = False
     mine_stored_energy = 0
-    if move_cd == 0:
-        for mk, mv in getattr(obs, "mines", {}).items():
-            mc2, mr2 = parse_key(mk)
-            if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
-                on_friendly_mine = True
-                if (mc2, mr2) == (c, r):
-                    mine_stored_energy = mv[0]
-                break
+    for mk, mv in getattr(obs, "mines", {}).items():
+        mc2, mr2 = parse_key(mk)
+        if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
+            on_friendly_mine = True
+            if (mc2, mr2) == (c, r):
+                mine_stored_energy = mv[0]
+            break
 
     # ── Pre-compute navigation params ──
     must_escape = (c, r) in enemy_danger
@@ -503,12 +502,13 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
         my_mines_nearby = []
         for mk, mv in getattr(obs, "mines", {}).items():
             mc2, mr2 = parse_key(mk)
-            if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
+            if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
                 my_mines_nearby.append((mc2, mr2))
 
         if STATE["mine_wait"]:
             mine_exists_nearby = any(
-                mv[2] == my_player and abs(parse_key(mk)[0] - c) + abs(parse_key(mk)[1] - r) <= 1
+                mv[2] == my_player and (abs(parse_key(mk)[0] - c) + abs(parse_key(mk)[1] - r) <= 1
+                    or parse_key(mk) in ((c-1, r+1), (c+1, r+1), (c, r+2)))
                 for mk, mv in getattr(obs, "mines", {}).items()
             )
             waited = turn - STATE["mine_wait_since"]
@@ -637,7 +637,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 my_mines_nearby_build = []
                 for mk, mv in getattr(obs, "mines", {}).items():
                     mc2, mr2 = parse_key(mk)
-                    if mv[2] == my_player and abs(mc2 - c) + abs(mr2 - r) <= 1:
+                    if mv[2] == my_player and (abs(mc2 - c) + abs(mr2 - r) <= 1 or (mc2, mr2) in ((c-1, r+1), (c+1, r+1), (c, r+2))):
                         my_mines_nearby_build.append((mc2, mr2))
 
                 if my_mines_nearby_build and panic_steps > ps_safe:
