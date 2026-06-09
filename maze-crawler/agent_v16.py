@@ -314,7 +314,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     _progress = min(1.0, turn / _ramp_steps)
     _scroll_interval = max(float(_end_int), _start_int - (_start_int - _end_int) * _progress)
     panic_steps = gap * _scroll_interval
-    ps_safe = (12 + turn // 10) if turn <= 100 else (28 + turn // 20)
+    ps_safe = 20 + turn // 10;
     if panic_steps >= 25:
         roi_threshold = 300
     else:
@@ -395,8 +395,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
     # ── Pre-compute navigation params ──
     must_escape = (c, r) in enemy_danger
     fresh_worker = (turn - STATE.get("last_build_turn", -999)) <= 1
-    crush = not fresh_worker or (stuck >= 1) or (gap <= 5) or must_escape
-    panic = (gap <= 5) or must_escape
+    crush = not fresh_worker or (stuck >= 1) or (panic_steps <= ps_safe) or must_escape
+    panic = (panic_steps <= ps_safe) or must_escape
     north_open = can_go(obs, config, c, r, "NORTH")
 
     # Pre-check: skip navigation when factory should collect mine energy
@@ -441,8 +441,8 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                 move_targets.append((c + dc_t, r + dr_t))
         danger_escape = bool(move_targets) and all(t in enemy_danger for t in move_targets)
 
-        allow_danger_jump = (gap <= 5)
-        panic = (gap <= 5) or danger_escape
+        allow_danger_jump = (panic_steps <= ps_safe)
+        panic = (panic_steps <= ps_safe) or danger_escape
         lr = r + 2
         landing_friendly = friendly_at(occupied, (c, lr), my_player)
         if (in_bounds(c, lr, obs, config)
@@ -476,7 +476,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
                         return
 
         # Lateral jumps: emergency (gap≤3) or danger escape or stuck
-        if gap <= 5 or danger_escape or stuck >= 6:
+        if panic_steps <= ps_safe or danger_escape or stuck >= 6:
             for jd, (jdc, jdr) in (("JUMP_EAST", (2, 0)), ("JUMP_WEST", (-2, 0))):
                 lc, lr2 = c + jdc, r + jdr
                 if not in_bounds(lc, lr2, obs, config):
@@ -574,7 +574,7 @@ def factory_action(uid, data, obs, config, actions, reserved, occupied, my_playe
             goals = [mine_target] + goals
 
     # Update panic for post-JUMP navigation context
-    panic = (gap <= 5) or must_escape
+    panic = (panic_steps <= ps_safe) or must_escape
     north_open = can_go(obs, config, c, r, "NORTH")
 
     # Dead-end check: skip Tier 1/2 if r+1 is a complete dead end and no jump available
